@@ -1,6 +1,6 @@
 "use client";
 
-import { Download, RotateCcw } from "lucide-react";
+import { Download, RotateCcw, Shuffle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -9,17 +9,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { Fit } from "@/lib/fit";
 import type { FontOption } from "@/lib/fonts";
 import {
@@ -41,7 +33,6 @@ const FIELDS: Array<{
   key: keyof NameplateContent;
   label: string;
   placeholder: string;
-  hint?: string;
 }> = [
   { key: "bizNumber", label: "사업자등록번호", placeholder: "123-45-67890" },
   { key: "companyName", label: "상호", placeholder: "주식회사 예시" },
@@ -51,7 +42,15 @@ const FIELDS: Array<{
   { key: "businessItem", label: "종목", placeholder: "소프트웨어 개발 및 공급업" },
 ];
 
-const DPI_OPTIONS = [300, 600, 1200];
+/** 랜덤 기울기 범위(도). 방향도 무작위로 고른다. */
+const TILT_MIN = 0.5;
+const TILT_MAX = 1.5;
+
+function randomTilt(): number {
+  const deg = TILT_MIN + Math.random() * (TILT_MAX - TILT_MIN);
+  const signed = Math.random() < 0.5 ? -deg : deg;
+  return Math.round(signed * 10) / 10;
+}
 
 function sanitizeFileName(name: string): string {
   const cleaned = name.replace(/[\\/:*?"<>|]/g, "").trim();
@@ -61,7 +60,9 @@ function sanitizeFileName(name: string): string {
 export function NameplateStudio({ fonts }: { fonts: FontOption[] }) {
   const [content, setContent] = useState<NameplateContent>(DEFAULT_CONTENT);
   const [fontId, setFontId] = useState(fonts[0]?.id ?? "");
-  const [style, setStyle] = useState(DEFAULT_STYLE);
+  const [widthMm, setWidthMm] = useState(DEFAULT_STYLE.widthMm);
+  const [color, setColor] = useState(DEFAULT_STYLE.color);
+  const [tilt, setTilt] = useState(0);
   const [paperBackdrop, setPaperBackdrop] = useState(true);
   const [size, setSize] = useState({ w: 0, h: 0, mmW: 0, mmH: 0 });
   const [fits, setFits] = useState<Partial<Record<keyof NameplateContent, Fit>>>({});
@@ -75,9 +76,13 @@ export function NameplateStudio({ fonts }: { fonts: FontOption[] }) {
     [fonts, fontId],
   );
 
+  // 사용자가 고르는 건 가로 길이·잉크 색·글꼴·기울기뿐이고 나머지는 고정값을 쓴다.
   const fullStyle: NameplateStyle | null = useMemo(
-    () => (font ? { ...style, fontFamily: font.family } : null),
-    [font, style],
+    () =>
+      font
+        ? { ...DEFAULT_STYLE, widthMm, color, rotationDeg: tilt, fontFamily: font.family }
+        : null,
+    [font, widthMm, color, tilt],
   );
 
   useEffect(() => {
@@ -131,13 +136,6 @@ export function NameplateStudio({ fonts }: { fonts: FontOption[] }) {
     setContent((prev) => ({ ...prev, [key]: value }));
   }, []);
 
-  const updateStyle = useCallback(
-    <K extends keyof typeof DEFAULT_STYLE>(key: K, value: (typeof DEFAULT_STYLE)[K]) => {
-      setStyle((prev) => ({ ...prev, [key]: value }));
-    },
-    [],
-  );
-
   const handleDownload = useCallback(async () => {
     const canvas = renderedRef.current;
     if (!canvas) return;
@@ -162,8 +160,10 @@ export function NameplateStudio({ fonts }: { fonts: FontOption[] }) {
 
   const handleReset = useCallback(() => {
     setContent(DEFAULT_CONTENT);
-    setStyle(DEFAULT_STYLE);
     setFontId(fonts[0]?.id ?? "");
+    setWidthMm(DEFAULT_STYLE.widthMm);
+    setColor(DEFAULT_STYLE.color);
+    setTilt(0);
   }, [fonts]);
 
   return (
@@ -173,193 +173,96 @@ export function NameplateStudio({ fonts }: { fonts: FontOption[] }) {
           <CardTitle className="text-base">명판 내용</CardTitle>
           <CardDescription>사업자등록증에 적힌 그대로 넣으면 됩니다.</CardDescription>
         </CardHeader>
-        <CardContent>
-          <Tabs defaultValue="content">
-            <TabsList className="grid w-full grid-cols-2">
-              <TabsTrigger value="content">내용</TabsTrigger>
-              <TabsTrigger value="design">디자인</TabsTrigger>
-            </TabsList>
-
-            <TabsContent value="content" className="mt-4 space-y-4">
-              {FIELDS.map((field) => (
-                <div key={field.key} className="space-y-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <Label htmlFor={field.key}>{field.label}</Label>
-                    <FitHint fit={fits[field.key]} />
-                  </div>
-                  <Input
-                    id={field.key}
-                    value={content[field.key]}
-                    placeholder={field.placeholder}
-                    onChange={(e) => updateContent(field.key, e.target.value)}
-                  />
+        <CardContent className="space-y-6">
+          <div className="space-y-4">
+            {FIELDS.map((field) => (
+              <div key={field.key} className="space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <Label htmlFor={field.key}>{field.label}</Label>
+                  <FitHint fit={fits[field.key]} />
                 </div>
-              ))}
-            </TabsContent>
-
-            <TabsContent value="design" className="mt-4 space-y-6">
-              <div className="space-y-2">
-                <Label htmlFor="font">글꼴</Label>
-                <Select value={fontId} onValueChange={setFontId}>
-                  <SelectTrigger id="font" className="w-full">
-                    <SelectValue placeholder="글꼴 선택" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {fonts.map((f) => (
-                      <SelectItem key={f.id} value={f.id}>
-                        {f.label}
-                        <span className="text-muted-foreground ml-2 text-xs">{f.hint}</span>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <Input
+                  id={field.key}
+                  value={content[field.key]}
+                  placeholder={field.placeholder}
+                  onChange={(e) => updateContent(field.key, e.target.value)}
+                />
               </div>
+            ))}
+          </div>
 
-              <div className="space-y-2">
-                <Label>잉크 색</Label>
-                <div className="flex flex-wrap items-center gap-2">
-                  {INK_PRESETS.map((preset) => (
-                    <Button
-                      key={preset.value}
-                      type="button"
-                      variant={style.color === preset.value ? "default" : "outline"}
-                      size="sm"
-                      onClick={() => updateStyle("color", preset.value)}
-                    >
-                      <span
-                        className="mr-1 size-3 rounded-full border"
-                        style={{ backgroundColor: preset.value }}
-                      />
-                      {preset.label}
-                    </Button>
-                  ))}
-                  <input
-                    type="color"
-                    aria-label="잉크 색 직접 선택"
-                    value={style.color}
-                    onChange={(e) => updateStyle("color", e.target.value)}
-                    className="border-input h-9 w-12 cursor-pointer rounded-md border bg-transparent p-1"
-                  />
-                </div>
-              </div>
+          <Separator />
 
-              <Separator />
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label>가로 길이</Label>
+              <span className="text-muted-foreground text-xs tabular-nums">{widthMm}mm</span>
+            </div>
+            <Slider
+              value={[widthMm]}
+              min={30}
+              max={100}
+              step={1}
+              onValueChange={([v]) => setWidthMm(v)}
+            />
+            <p className="text-muted-foreground text-xs">
+              서식의 공급자란에서 항목 이름 칸을 뺀 폭에 맞추면 됩니다.
+            </p>
+          </div>
 
-              <SliderRow
-                label="가로 길이"
-                value={style.widthMm}
-                min={30}
-                max={100}
-                step={1}
-                suffix="mm"
-                onChange={(v) => updateStyle("widthMm", v)}
-              />
-              <SliderRow
-                label="가로세로 비율"
-                value={style.aspectRatio}
-                min={1.2}
-                max={4}
-                step={0.01}
-                suffix=": 1"
-                onChange={(v) => updateStyle("aspectRatio", v)}
-              />
-              <SliderRow
-                label="최소 자간"
-                value={style.minTracking}
-                min={-0.2}
-                max={0}
-                step={0.01}
-                format={(v) => `${Math.round(v * 100)}%`}
-                onChange={(v) => updateStyle("minTracking", v)}
-              />
-              <SliderRow
-                label="최소 장평"
-                value={style.minScaleX}
-                min={0.4}
-                max={1}
-                step={0.01}
-                format={(v) => `${Math.round(v * 100)}%`}
-                onChange={(v) => updateStyle("minScaleX", v)}
-              />
-              <SliderRow
-                label="최소 글자 크기"
-                value={style.minTextScale}
-                min={0.3}
-                max={1}
-                step={0.01}
-                format={(v) => `기본의 ${Math.round(v * 100)}%`}
-                onChange={(v) => updateStyle("minTextScale", v)}
-              />
-              <p className="text-muted-foreground text-xs">
-                칸보다 글이 길면 자간을 먼저 좁히고, 최소 자간에 닿으면 장평을 줄이고,
-                최소 장평에도 닿으면 그때 글자 크기를 줄입니다. 최소 글자 크기보다 작아지면
-                상호·소재지·업태·종목은 두 줄로 나눕니다.
-              </p>
-              <SliderRow
-                label="획 굵기"
-                value={style.weight}
-                min={0}
-                max={0.05}
-                step={0.002}
-                format={(v) => v.toFixed(3)}
-                onChange={(v) => updateStyle("weight", v)}
-              />
-              <SliderRow
-                label="잉크 질감"
-                value={style.inkTexture}
-                min={0}
-                max={1}
-                step={0.05}
-                format={(v) => `${Math.round(v * 100)}%`}
-                onChange={(v) => updateStyle("inkTexture", v)}
-              />
-              <SliderRow
-                label="기울기"
-                value={style.rotationDeg}
-                min={-3}
-                max={3}
-                step={0.1}
-                suffix="°"
-                onChange={(v) => updateStyle("rotationDeg", v)}
-              />
+          <ChoiceRow label="잉크 색">
+            {INK_PRESETS.map((preset) => (
+              <Button
+                key={preset.value}
+                type="button"
+                size="sm"
+                variant={color === preset.value ? "default" : "outline"}
+                onClick={() => setColor(preset.value)}
+              >
+                <span
+                  className="size-3 rounded-full border"
+                  style={{ backgroundColor: preset.value }}
+                />
+                {preset.label}
+              </Button>
+            ))}
+          </ChoiceRow>
 
-              <Separator />
+          <ChoiceRow label="글꼴">
+            {fonts.map((f) => (
+              <Button
+                key={f.id}
+                type="button"
+                size="sm"
+                variant={fontId === f.id ? "default" : "outline"}
+                onClick={() => setFontId(f.id)}
+                title={f.hint}
+              >
+                {f.label}
+              </Button>
+            ))}
+          </ChoiceRow>
 
-              <div className="space-y-2">
-                <Label htmlFor="dpi">해상도</Label>
-                <Select
-                  value={String(style.dpi)}
-                  onValueChange={(v) => updateStyle("dpi", Number(v))}
-                >
-                  <SelectTrigger id="dpi" className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {DPI_OPTIONS.map((dpi) => (
-                      <SelectItem key={dpi} value={String(dpi)}>
-                        {dpi} dpi
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <ToggleRow
-                id="space-owner"
-                label="성명 자간 넓히기"
-                hint="홍 길 동 처럼 한 글자씩 띄웁니다. 칸이 좁으면 이 간격부터 줄입니다."
-                checked={style.spaceOutOwnerName}
-                onChange={(v) => updateStyle("spaceOutOwnerName", v)}
-              />
-              <ToggleRow
-                id="border"
-                label="테두리"
-                hint="사각 테두리를 두릅니다."
-                checked={style.border}
-                onChange={(v) => updateStyle("border", v)}
-              />
-            </TabsContent>
-          </Tabs>
+          <ChoiceRow label="기울기" note={tilt !== 0 ? `${tilt > 0 ? "+" : ""}${tilt}°` : undefined}>
+            <Button
+              type="button"
+              size="sm"
+              variant={tilt === 0 ? "default" : "outline"}
+              onClick={() => setTilt(0)}
+            >
+              똑바로
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={tilt !== 0 ? "default" : "outline"}
+              onClick={() => setTilt(randomTilt())}
+              title="누를 때마다 새 각도를 고릅니다"
+            >
+              <Shuffle className="size-3.5" />
+              랜덤 기울기
+            </Button>
+          </ChoiceRow>
         </CardContent>
       </Card>
 
@@ -413,7 +316,7 @@ export function NameplateStudio({ fonts }: { fonts: FontOption[] }) {
 
           {size.w > 0 && (
             <p className="text-muted-foreground text-xs">
-              {size.w.toLocaleString()} × {size.h.toLocaleString()} px · {style.dpi} dpi
+              {size.w.toLocaleString()} × {size.h.toLocaleString()} px · {DEFAULT_STYLE.dpi} dpi
             </p>
           )}
         </CardContent>
@@ -446,40 +349,22 @@ function FitHint({ fit }: { fit?: Fit }) {
   );
 }
 
-function SliderRow({
+function ChoiceRow({
   label,
-  value,
-  min,
-  max,
-  step,
-  suffix = "",
-  format,
-  onChange,
+  note,
+  children,
 }: {
   label: string;
-  value: number;
-  min: number;
-  max: number;
-  step: number;
-  suffix?: string;
-  format?: (v: number) => string;
-  onChange: (value: number) => void;
+  note?: string;
+  children: React.ReactNode;
 }) {
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
         <Label>{label}</Label>
-        <span className="text-muted-foreground text-xs tabular-nums">
-          {format ? format(value) : `${value}${suffix}`}
-        </span>
+        {note && <span className="text-muted-foreground text-xs tabular-nums">{note}</span>}
       </div>
-      <Slider
-        value={[value]}
-        min={min}
-        max={max}
-        step={step}
-        onValueChange={([v]) => onChange(v)}
-      />
+      <div className="flex flex-wrap gap-2">{children}</div>
     </div>
   );
 }

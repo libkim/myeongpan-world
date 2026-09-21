@@ -129,7 +129,7 @@ export const DEFAULT_STYLE: Omit<NameplateStyle, "fontFamily"> = {
   color: "#1a2e78",
   weight: 0.022,
   inkTexture: 0.15,
-  rotationDeg: -0.4,
+  rotationDeg: 0,
   dpi: 600,
   spaceOutOwnerName: true,
   border: false,
