@@ -1,0 +1,12 @@
+.git
+.github
+node_modules
+.next
+out
+npm-debug.log*
+.DS_Store
+README.md
+LICENSE
+Dockerfile
+.dockerignore
+compose.yaml

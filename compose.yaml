@@ -1,0 +1,7 @@
+services:
+  web:
+    build: .
+    image: myeongpan-world
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
