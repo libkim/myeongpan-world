@@ -88,8 +88,36 @@ export function fittedWidth(unitWidths: number[], fit: Fit): number {
 }
 
 /**
- * 두 줄로 나눌 위치를 고른다. 두 줄 중 긴 쪽이 가장 짧아지는 곳을 찾되,
- * 띄어쓰기에서 끊는 쪽이 크게 손해 보지 않으면 띄어쓰기를 택한다.
+ * 띄어쓰기에서 끊었을 때 짧은 줄이 긴 줄의 이 비율 이상이면 띄어쓰기에서 끊는다.
+ * 이보다 한쪽으로 쏠리면 (예: "주식회사 / 한국스마트정보통신기술연구소", 약 29%)
+ * 단어 중간에서 끊는다.
+ */
+export const MIN_SPACE_BREAK_BALANCE = 0.4;
+
+const isAlnum = (c: string | undefined) => !!c && /[0-9A-Za-z]/.test(c);
+/** 줄 첫머리에 올 수 없는 문자 */
+const NO_LINE_START = new Set([",", ".", ")", "]", "}", "·", "%", ":", ";", "!", "?", "-", "~"]);
+/** 줄 끝에 올 수 없는 문자 */
+const NO_LINE_END = new Set(["(", "[", "{"]);
+
+/**
+ * 단어 중간에서 끊어도 되는 자리인지.
+ * 숫자·영문이 이어지는 사이(235, 7F 등), 닫는 문장부호 앞, 여는 괄호 뒤는 끊지 않는다.
+ */
+function canBreakInsideWord(chars: string[], at: number): boolean {
+  const prev = chars[at - 1];
+  const next = chars[at];
+  if (isAlnum(prev) && isAlnum(next)) return false;
+  if (NO_LINE_START.has(next)) return false;
+  if (NO_LINE_END.has(prev)) return false;
+  return true;
+}
+
+/**
+ * 두 줄로 나눌 위치를 고른다.
+ *   1. 띄어쓰기에서 끊는 것이 기본이다.
+ *   2. 가장 균형 잡힌 띄어쓰기 분리에서도 짧은 줄이 긴 줄의 MIN_SPACE_BREAK_BALANCE 에
+ *      못 미칠 때만 단어 중간에서 끊는다. 이때도 canBreakInsideWord 가 막는 자리는 피한다.
  * @returns 둘째 줄이 시작하는 글자 위치. 나눌 수 없으면 null
  */
 export function chooseLineBreak(chars: string[], unitWidths: number[]): number | null {
@@ -106,16 +134,26 @@ export function chooseLineBreak(chars: string[], unitWidths: number[]): number |
     return w;
   };
 
-  let best: { at: number; score: number } | null = null;
-  let bestSpace: { at: number; score: number } | null = null;
+  type Candidate = { at: number; score: number; balance: number };
+  let bestWord: Candidate | null = null;
+  let bestSpace: Candidate | null = null;
   for (let at = 1; at < n; at += 1) {
-    const score = Math.max(widthOf(0, at), widthOf(at, n));
-    if (!best || score < best.score) best = { at, score };
-    if (chars[at - 1] === " " || chars[at] === " ") {
-      if (!bestSpace || score < bestSpace.score) bestSpace = { at, score };
+    const a = widthOf(0, at);
+    const b = widthOf(at, n);
+    const score = Math.max(a, b);
+    const cand = { at, score, balance: score > 0 ? Math.min(a, b) / score : 0 };
+    const atSpace = chars[at - 1] === " " || chars[at] === " ";
+    // 균형이 같으면 뒤쪽(첫 줄이 긴 쪽)을 택한다. "주식회사 예시상사 / 서울지점" 처럼
+    // 앞 단어들이 한 덩어리로 남는 편이 자연스럽다.
+    if (atSpace) {
+      if (!bestSpace || score <= bestSpace.score) bestSpace = cand;
+    } else if (canBreakInsideWord(chars, at)) {
+      if (!bestWord || score <= bestWord.score) bestWord = cand;
     }
   }
-  if (!best) return null;
-  if (bestSpace && bestSpace.score <= best.score * 1.2) return bestSpace.at;
-  return best.at;
+
+  if (bestSpace && (!bestWord || bestSpace.balance >= MIN_SPACE_BREAK_BALANCE)) {
+    return bestSpace.at;
+  }
+  return bestWord ? bestWord.at : (bestSpace?.at ?? null);
 }
