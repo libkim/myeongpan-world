@@ -15,7 +15,8 @@ export interface FitLimits {
   minScaleX: number;
 }
 
-export type FitStage = "fits" | "tracking" | "scaleX" | "size";
+/** wrap 은 렌더러가 두 줄로 나눴을 때 붙인다. */
+export type FitStage = "fits" | "tracking" | "scaleX" | "size" | "wrap";
 
 export interface Fit {
   /** 최종 글자 크기(px) */
@@ -84,4 +85,37 @@ export function fittedWidth(unitWidths: number[], fit: Fit): number {
   if (n === 0) return 0;
   const glyphs = unitWidths.reduce((a, b) => a + b, 0) * fit.size * fit.scaleX;
   return glyphs + fit.tracking * (n - 1);
+}
+
+/**
+ * 두 줄로 나눌 위치를 고른다. 두 줄 중 긴 쪽이 가장 짧아지는 곳을 찾되,
+ * 띄어쓰기에서 끊는 쪽이 크게 손해 보지 않으면 띄어쓰기를 택한다.
+ * @returns 둘째 줄이 시작하는 글자 위치. 나눌 수 없으면 null
+ */
+export function chooseLineBreak(chars: string[], unitWidths: number[]): number | null {
+  const n = chars.length;
+  if (n < 2) return null;
+
+  const widthOf = (from: number, to: number) => {
+    let a = from;
+    let b = to;
+    while (a < b && chars[a] === " ") a += 1;
+    while (b > a && chars[b - 1] === " ") b -= 1;
+    let w = 0;
+    for (let i = a; i < b; i += 1) w += unitWidths[i];
+    return w;
+  };
+
+  let best: { at: number; score: number } | null = null;
+  let bestSpace: { at: number; score: number } | null = null;
+  for (let at = 1; at < n; at += 1) {
+    const score = Math.max(widthOf(0, at), widthOf(at, n));
+    if (!best || score < best.score) best = { at, score };
+    if (chars[at - 1] === " " || chars[at] === " ") {
+      if (!bestSpace || score < bestSpace.score) bestSpace = { at, score };
+    }
+  }
+  if (!best) return null;
+  if (bestSpace && bestSpace.score <= best.score * 1.2) return bestSpace.at;
+  return best.at;
 }

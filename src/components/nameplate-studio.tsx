@@ -281,9 +281,19 @@ export function NameplateStudio({ fonts }: { fonts: FontOption[] }) {
                 format={(v) => `${Math.round(v * 100)}%`}
                 onChange={(v) => updateStyle("minScaleX", v)}
               />
+              <SliderRow
+                label="최소 글자 크기"
+                value={style.minTextScale}
+                min={0.3}
+                max={1}
+                step={0.01}
+                format={(v) => `기본의 ${Math.round(v * 100)}%`}
+                onChange={(v) => updateStyle("minTextScale", v)}
+              />
               <p className="text-muted-foreground text-xs">
                 칸보다 글이 길면 자간을 먼저 좁히고, 최소 자간에 닿으면 장평을 줄이고,
-                최소 장평에도 닿으면 그때 글자 크기를 줄입니다.
+                최소 장평에도 닿으면 그때 글자 크기를 줄입니다. 최소 글자 크기보다 작아지면
+                상호·소재지·업태·종목은 두 줄로 나눕니다.
               </p>
               <SliderRow
                 label="획 굵기"
@@ -417,6 +427,7 @@ const STAGE_LABEL: Record<Fit["stage"], string> = {
   tracking: "자간 조정",
   scaleX: "장평",
   size: "글자 축소",
+  wrap: "줄바꿈",
 };
 
 function FitHint({ fit }: { fit?: Fit }) {
