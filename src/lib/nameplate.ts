@@ -15,7 +15,7 @@ import {
   type Fit,
   type FitLimits,
 } from "./fit";
-import { applyStamp, type StampRegion } from "./stamp";
+import { applyStamp, type StampRegion, type StampStyle } from "./stamp";
 
 export interface NameplateContent {
   /** 사업자등록번호 */
@@ -44,6 +44,8 @@ export interface NameplateStyle {
   weight: number;
   /** 인영 질감의 시드. 같은 시드면 항상 같은 모양으로 찍힌다 */
   inkSeed: number;
+  /** 인영 스타일 */
+  stampStyle: StampStyle;
   /** 기울기(도) */
   rotationDeg: number;
   /** 출력 해상도 */
@@ -130,6 +132,7 @@ export const DEFAULT_STYLE: Omit<NameplateStyle, "fontFamily"> = {
   color: "#1a2e78",
   weight: 0.014,
   inkSeed: 1,
+  stampStyle: "rough",
   rotationDeg: 0,
   dpi: 600,
   spaceOutOwnerName: true,
@@ -355,6 +358,7 @@ export function renderNameplate(
     regions,
     rows: ROWS,
     seed: style.inkSeed,
+    style: style.stampStyle,
   });
 
   if (Math.abs(style.rotationDeg) < 0.01) {

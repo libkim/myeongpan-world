@@ -16,6 +16,9 @@
  */
 
 /** 인영 강도. 조절은 이 값들만 바꾸면 된다. 길이 단위는 행 높이 대비 비율. */
+export type StampStyle = "rough" | "soft";
+
+/** 거친 인영 — 테두리를 거의 이진화해 또렷하고 거칠게 */
 export const STAMP = {
   // ① 새김 윤곽
   warpScale: 0.22, // 윤곽 흔들림의 물결 크기
@@ -41,10 +44,46 @@ export const STAMP = {
   grainY: 0.04, // 결의 세로 크기 (길다)
   grain: 0.18, // 결의 세기
   darken: 0.3, // 잉크가 두꺼운 곳을 더 진하게
+  // 경계·얼룩·번짐 (거친 인영은 경계를 거의 이진화하고 번짐·얼룩이 없다)
+  edgeBand: 0.04, // 잉크 경계가 넘어가는 폭 (블러 값 기준). 좁으면 테두리가 계단처럼 보인다
+  voidSoft: 0, // 흰 점 가장자리의 부드러움. 0 이면 뚝 끊긴다
+  mottleScale: 0.05, // 얼룩 결 크기
+  mottle: 0, // 얼룩 세기
+  haloRadius: 0.03, // 글자 밖으로 스민 번짐의 폭
+  haloAlpha: 0, // 글자 밖 번짐의 농도
   inkBoost: 1.2, // 전체 농도 보정
   // 가독성
   minLegible: 0.82, // 행마다 원래 글자 픽셀 중 잉크가 남아야 하는 비율
 };
+
+/**
+ * 번짐 인영 — 문턱으로 자르지 않고 경계를 1~2px 에 걸쳐 부드럽게 넘긴다.
+ * 테두리 요철은 크게 잡아 매끈한 물결이 되고, 글자 밖으로 잉크가 옅게 스민다.
+ */
+export const STAMP_SOFT: typeof STAMP = {
+  ...STAMP,
+  warpAmp: 0.012,
+  roundRadius: 0.009,
+  spread: 0.47,
+  edgeRoughScale: 0.03,
+  edgeRough: 0.06,
+  edgeBand: 0.06,
+  rimDecay: 0.03,
+  rimInner: 0.74,
+  voidScale: 0.02,
+  voidBase: 0.6,
+  voidAlpha: 0.15,
+  voidSoft: 0.1,
+  grainX: 0.012,
+  grainY: 0.06,
+  grain: 0.08,
+  mottle: 0.2,
+  haloAlpha: 0.1,
+  haloRadius: 0.012,
+  inkBoost: 1.3,
+};
+
+const STYLES: Record<StampStyle, typeof STAMP> = { rough: STAMP, soft: STAMP_SOFT };
 
 /* ---------- 시드 고정 난수와 Perlin 잡음 ---------- */
 
@@ -262,6 +301,8 @@ export interface StampOptions {
   /** 행 수 (가독성 확인 단위) */
   rows: number;
   seed: number;
+  /** 인영 스타일. 기본은 거친 인영 */
+  style?: StampStyle;
 }
 
 /**
@@ -273,6 +314,7 @@ export function applyStamp(canvas: HTMLCanvasElement, opts: StampOptions): void 
   if (!ctx) return;
   const { width: w, height: h } = canvas;
   const u = opts.unit;
+  const P = STYLES[opts.style ?? "rough"];
   const image = ctx.getImageData(0, 0, w, h);
   const px = image.data;
 
@@ -300,7 +342,7 @@ export function applyStamp(canvas: HTMLCanvasElement, opts: StampOptions): void 
 
   // ① 윤곽 흔들림: 성긴 격자의 잡음으로 픽셀을 밀어 테두리를 부드럽게 휘게 한다.
   // 물결 크기는 전체 공통, 밀리는 거리는 칸의 글자 크기에 비례.
-  const ws = S(STAMP.warpScale, u);
+  const ws = S(P.warpScale, u);
   const step = Math.max(2, Math.round(ws / 6));
   const dx = coarseField(w, h, step, (x, y) => (noiseWarpX.fbm(x / ws, y / ws, 2) - 0.5) * 2);
   const dy = coarseField(w, h, step, (x, y) => (noiseWarpY.fbm(x / ws, y / ws, 2) - 0.5) * 2);
@@ -308,7 +350,7 @@ export function applyStamp(canvas: HTMLCanvasElement, opts: StampOptions): void 
   for (let y = 0; y < h; y += 1) {
     for (let x = 0; x < w; x += 1) {
       const i = y * w + x;
-      const amp = STAMP.warpAmp * unitMap[i];
+      const amp = P.warpAmp * unitMap[i];
       warped[i] = sample(src, w, h, x + dx[i] * amp, y + dy[i] * amp);
     }
   }
@@ -316,29 +358,37 @@ export function applyStamp(canvas: HTMLCanvasElement, opts: StampOptions): void 
   // ① 모서리 둥글게 + ② 번짐: 블러 뒤 0.5 보다 낮은 문턱으로 다시 잘라 획을 두껍게 하고,
   // 문턱을 고주파 잡음으로 흔들어 테두리를 섬유처럼 거칠게 만든다.
   // 블러 반경은 칸마다 달라서 칸 영역을 잘라 따로 블러한다.
-  const blurred = warped.slice();
-  for (const r of regions) {
-    const xa = Math.max(0, Math.floor(r.x0));
-    const ya = Math.max(0, Math.floor(r.y0));
-    const rw = Math.min(w, Math.ceil(r.x1)) - xa;
-    const rh = Math.min(h, Math.ceil(r.y1)) - ya;
-    if (rw <= 2 || rh <= 2) continue;
-    const part = new Float32Array(rw * rh);
-    for (let y = 0; y < rh; y += 1) part.set(warped.subarray((ya + y) * w + xa, (ya + y) * w + xa + rw), y * rw);
-    const b = blur(part, rw, rh, STAMP.roundRadius * r.unit);
-    for (let y = 0; y < rh; y += 1) blurred.set(b.subarray(y * rw, y * rw + rw), (ya + y) * w + xa);
-  }
+  const blurRegions = (field: Float32Array, ratio: number) => {
+    const outField = field.slice();
+    for (const r of regions) {
+      const xa = Math.max(0, Math.floor(r.x0));
+      const ya = Math.max(0, Math.floor(r.y0));
+      const rw = Math.min(w, Math.ceil(r.x1)) - xa;
+      const rh = Math.min(h, Math.ceil(r.y1)) - ya;
+      if (rw <= 2 || rh <= 2) continue;
+      const part = new Float32Array(rw * rh);
+      for (let y = 0; y < rh; y += 1) {
+        part.set(field.subarray((ya + y) * w + xa, (ya + y) * w + xa + rw), y * rw);
+      }
+      const b = blur(part, rw, rh, ratio * r.unit);
+      for (let y = 0; y < rh; y += 1) outField.set(b.subarray(y * rw, y * rw + rw), (ya + y) * w + xa);
+    }
+    return outField;
+  };
+  const blurred = blurRegions(warped, P.roundRadius);
   const mask = new Float32Array(w * h);
   for (let y = 0; y < h; y += 1) {
     for (let x = 0; x < w; x += 1) {
       const i = y * w + x;
       const b = blurred[i];
       if (b < 0.03) continue;
-      const es = S(STAMP.edgeRoughScale, unitMap[i]);
-      const t = STAMP.spread + STAMP.edgeRough * (noiseEdge.fbm(x / es, y / es, 3) - 0.5) * 2;
-      mask[i] = smoothstep(t - 0.04, t + 0.04, b);
+      const es = S(P.edgeRoughScale, unitMap[i]);
+      const t = P.spread + P.edgeRough * (noiseEdge.fbm(x / es, y / es, 3) - 0.5) * 2;
+      mask[i] = smoothstep(t - P.edgeBand, t + P.edgeBand, b);
     }
   }
+  // 글자 밖으로 종이에 스민 잉크. 번짐 인영에서만 쓴다.
+  const halo = P.haloAlpha > 0 ? blurRegions(mask, P.haloRadius) : null;
 
   // ③ 테두리 고임: 테두리에서 멀어질수록 옅게.
   const dist = distanceInside(mask, w, h);
@@ -348,7 +398,7 @@ export function applyStamp(canvas: HTMLCanvasElement, opts: StampOptions): void 
   const gx = Math.cos(angle);
   const gy = Math.sin(angle);
   const half = Math.hypot(w, h) / 2;
-  const bs = S(STAMP.blotScale, u);
+  const bs = S(P.blotScale, u);
   const pressureRaw = coarseField(w, h, Math.max(4, Math.round(bs / 8)), (x, y) => {
     const ramp = 0.5 + 0.5 * (((x - w / 2) * gx + (y - h / 2) * gy) / half);
     return 0.55 * ramp + 0.45 * noiseBlot.fbm(x / bs, y / bs, 3);
@@ -360,7 +410,7 @@ export function applyStamp(canvas: HTMLCanvasElement, opts: StampOptions): void 
   let out = new Float32Array(w * h);
   for (let k = 1; k >= 0; k -= 0.25) {
     out = new Float32Array(w * h);
-    const pMin = 1 - (1 - STAMP.pressureMin) * k;
+    const pMin = 1 - (1 - P.pressureMin) * k;
     const legible = new Float64Array(opts.rows);
     const original = new Float64Array(opts.rows);
     for (let y = 0; y < h; y += 1) {
@@ -369,26 +419,36 @@ export function applyStamp(canvas: HTMLCanvasElement, opts: StampOptions): void 
         const i = y * w + x;
         if (src[i] > 0.5) original[row] += 1;
         const m = mask[i];
-        if (m <= 0) continue;
+        const spill = halo ? P.haloAlpha * smoothstep(0.02, 0.5, halo[i]) : 0;
+        if (m <= 0 && spill <= 0) continue;
         const ui = unitMap[i];
         const rim =
-          STAMP.rimInner + (1 - STAMP.rimInner) * Math.exp(-dist[i] / (STAMP.rimDecay * ui));
+          P.rimInner + (1 - P.rimInner) * Math.exp(-dist[i] / (P.rimDecay * ui));
         const pressure = pMin + (1 - pMin) * Math.min(1, Math.max(0, pressureRaw[i]));
         // ⑤ 흰 점: 힘이 약한 곳일수록 문턱이 낮아져 구멍이 많아진다.
-        const threshold = STAMP.voidBase + STAMP.voidByPressure * pressure + (1 - k) * 0.4;
-        const vs = S(STAMP.voidScale, ui);
-        const hole = noiseVoid.fbm(x / vs, y / vs, 3) > threshold ? STAMP.voidAlpha : 1;
+        const threshold = P.voidBase + P.voidByPressure * pressure + (1 - k) * 0.4;
+        const vs = S(P.voidScale, ui);
+        const vn = noiseVoid.fbm(x / vs, y / vs, 3);
+        const hole =
+          P.voidSoft > 0
+            ? 1 - (1 - P.voidAlpha) * smoothstep(threshold, threshold + P.voidSoft, vn)
+            : vn > threshold
+              ? P.voidAlpha
+              : 1;
         // ⑥ 종이 결
         const grain =
-          1 - STAMP.grain * noiseGrain.fbm(x / S(STAMP.grainX, ui), y / S(STAMP.grainY, ui), 2);
-        const a = Math.min(1, m * rim * pressure * hole * grain * STAMP.inkBoost);
+          1 - P.grain * noiseGrain.fbm(x / S(P.grainX, ui), y / S(P.grainY, ui), 2);
+        const ms = S(P.mottleScale, ui);
+        const mottle = P.mottle > 0 ? 1 - P.mottle * noiseBlot.fbm(x / ms + 97, y / ms + 31, 3) : 1;
+        const inked = m * rim * pressure * hole * grain * mottle * P.inkBoost;
+        const a = Math.min(1, Math.max(inked, spill * pressure));
         out[i] = a;
         if (src[i] > 0.5 && a > 0.25) legible[row] += 1;
       }
     }
     let ok = true;
     for (let r = 0; r < opts.rows; r += 1) {
-      if (original[r] > 0 && legible[r] / original[r] < STAMP.minLegible) ok = false;
+      if (original[r] > 0 && legible[r] / original[r] < P.minLegible) ok = false;
     }
     if (ok) break;
   }
@@ -402,7 +462,7 @@ export function applyStamp(canvas: HTMLCanvasElement, opts: StampOptions): void 
       px[j + 3] = 0;
       continue;
     }
-    const shade = 1 + STAMP.darken * (0.55 - Math.min(1, a / Math.max(mask[i], 1e-3)));
+    const shade = 1 + P.darken * (0.55 - Math.min(1, a / Math.max(mask[i], 1e-3)));
     px[j] = Math.min(255, cr * shade);
     px[j + 1] = Math.min(255, cg * shade);
     px[j + 2] = Math.min(255, cb * shade);

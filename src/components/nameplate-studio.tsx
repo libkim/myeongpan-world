@@ -14,6 +14,7 @@ import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import type { Fit } from "@/lib/fit";
 import type { FontOption } from "@/lib/fonts";
+import type { StampStyle } from "@/lib/stamp";
 import {
   canvasToPngBlob,
   DEFAULT_CONTENT,
@@ -63,6 +64,7 @@ export function NameplateStudio({ fonts }: { fonts: FontOption[] }) {
   const [widthMm, setWidthMm] = useState(DEFAULT_STYLE.widthMm);
   const [color, setColor] = useState(DEFAULT_STYLE.color);
   const [tilt, setTilt] = useState(0);
+  const [stampStyle, setStampStyle] = useState<StampStyle>(DEFAULT_STYLE.stampStyle);
   // 인영 모양은 페이지를 열 때 한 번 정하고, 글자를 고쳐도 바꾸지 않는다.
   const [inkSeed] = useState(() => Math.floor(Math.random() * 2 ** 31));
   const [paperBackdrop, setPaperBackdrop] = useState(true);
@@ -88,10 +90,11 @@ export function NameplateStudio({ fonts }: { fonts: FontOption[] }) {
             color,
             rotationDeg: tilt,
             inkSeed,
+            stampStyle,
             fontFamily: font.family,
           }
         : null,
-    [font, widthMm, color, tilt, inkSeed],
+    [font, widthMm, color, tilt, inkSeed, stampStyle],
   );
 
   useEffect(() => {
@@ -173,6 +176,7 @@ export function NameplateStudio({ fonts }: { fonts: FontOption[] }) {
     setWidthMm(DEFAULT_STYLE.widthMm);
     setColor(DEFAULT_STYLE.color);
     setTilt(0);
+    setStampStyle(DEFAULT_STYLE.stampStyle);
   }, [fonts]);
 
   return (
@@ -248,6 +252,25 @@ export function NameplateStudio({ fonts }: { fonts: FontOption[] }) {
                 title={f.hint}
               >
                 {f.label}
+              </Button>
+            ))}
+          </ChoiceRow>
+
+          <ChoiceRow label="인영 스타일">
+            {(
+              [
+                ["rough", "거친 인영"],
+                ["soft", "번짐 인영"],
+              ] as const
+            ).map(([value, label]) => (
+              <Button
+                key={value}
+                type="button"
+                size="sm"
+                variant={stampStyle === value ? "default" : "outline"}
+                onClick={() => setStampStyle(value)}
+              >
+                {label}
               </Button>
             ))}
           </ChoiceRow>
