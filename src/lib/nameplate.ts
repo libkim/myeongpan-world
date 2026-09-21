@@ -15,6 +15,7 @@ import {
   type Fit,
   type FitLimits,
 } from "./fit";
+import { applyStamp, type StampRegion } from "./stamp";
 
 export interface NameplateContent {
   /** 사업자등록번호 */
@@ -41,8 +42,8 @@ export interface NameplateStyle {
   color: string;
   /** 획 굵기 비율 (0 ~ 0.05) */
   weight: number;
-  /** 잉크 질감 강도 (0 ~ 1) */
-  inkTexture: number;
+  /** 인영 질감의 시드. 같은 시드면 항상 같은 모양으로 찍힌다 */
+  inkSeed: number;
   /** 기울기(도) */
   rotationDeg: number;
   /** 출력 해상도 */
@@ -127,8 +128,8 @@ export const DEFAULT_STYLE: Omit<NameplateStyle, "fontFamily"> = {
   widthMm: 50,
   aspectRatio: PLATE_ASPECT,
   color: "#1a2e78",
-  weight: 0.022,
-  inkTexture: 0.15,
+  weight: 0.014,
+  inkSeed: 1,
   rotationDeg: 0,
   dpi: 600,
   spaceOutOwnerName: true,
@@ -223,83 +224,6 @@ function drawFitted(
   });
 }
 
-/** 여러 옥타브를 겹친 부드러운 잡음. 잉크가 고르게 묻지 않은 느낌을 만든다. */
-function fractalNoise(width: number, height: number, octaves: number): Float32Array {
-  const acc = new Float32Array(width * height);
-  let amp = 1;
-  let total = 0;
-
-  const scratch = document.createElement("canvas");
-  scratch.width = width;
-  scratch.height = height;
-  const sctx = scratch.getContext("2d");
-  if (!sctx) return acc.fill(0.5);
-
-  for (let o = 0; o < octaves; o += 1) {
-    const res = 2 ** (o + 2);
-    const seedCanvas = document.createElement("canvas");
-    seedCanvas.width = res;
-    seedCanvas.height = res;
-    const seedCtx = seedCanvas.getContext("2d");
-    if (!seedCtx) continue;
-    const img = seedCtx.createImageData(res, res);
-    for (let i = 0; i < res * res; i += 1) {
-      const v = Math.floor(Math.random() * 256);
-      img.data[i * 4] = v;
-      img.data[i * 4 + 1] = v;
-      img.data[i * 4 + 2] = v;
-      img.data[i * 4 + 3] = 255;
-    }
-    seedCtx.putImageData(img, 0, 0);
-
-    sctx.clearRect(0, 0, width, height);
-    sctx.imageSmoothingEnabled = true;
-    sctx.imageSmoothingQuality = "high";
-    sctx.drawImage(seedCanvas, 0, 0, width, height);
-    const data = sctx.getImageData(0, 0, width, height).data;
-    for (let i = 0; i < acc.length; i += 1) {
-      acc[i] += (data[i * 4] / 255) * amp;
-    }
-    total += amp;
-    amp *= 0.5;
-  }
-
-  let min = Infinity;
-  let max = -Infinity;
-  for (let i = 0; i < acc.length; i += 1) {
-    acc[i] /= total;
-    if (acc[i] < min) min = acc[i];
-    if (acc[i] > max) max = acc[i];
-  }
-  const span = max - min || 1;
-  for (let i = 0; i < acc.length; i += 1) {
-    acc[i] = (acc[i] - min) / span;
-  }
-  return acc;
-}
-
-/** 글자 알파에 잡음을 곱해 농담을 흔든다. 획을 지우지는 않는다. */
-function applyInkTexture(canvas: HTMLCanvasElement, strength: number) {
-  if (strength <= 0) return;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-
-  const { width, height } = canvas;
-  const image = ctx.getImageData(0, 0, width, height);
-  const blot = fractalNoise(width, height, 5);
-  const grain = fractalNoise(width, height, 7);
-
-  const floor = 0.94 - 0.2 * strength;
-  for (let i = 0; i < width * height; i += 1) {
-    const alpha = image.data[i * 4 + 3];
-    if (alpha === 0) continue;
-    let keep = floor + (1 - floor) * blot[i];
-    keep *= 0.97 + 0.03 * grain[i];
-    image.data[i * 4 + 3] = Math.round(alpha * keep);
-  }
-  ctx.putImageData(image, 0, 0);
-}
-
 export interface RenderResult {
   canvas: HTMLCanvasElement;
   widthMm: number;
@@ -334,6 +258,17 @@ export function renderNameplate(
   const bodyRatio =
     ((pm.actualBoundingBoxAscent || probe * 0.8) + (pm.actualBoundingBoxDescent || 0)) / probe;
   const baseSize = (rowHeight * TEXT_FILL) / bodyRatio;
+
+  // 칸마다 최종 글자 크기를 모아 인영 효과 크기를 맞추는 데 쓴다.
+  const regions: StampRegion[] = [];
+  const addRegion = (cell: Cell, size: number) =>
+    regions.push({
+      x0: cell.x0 * width,
+      x1: cell.x1 * width,
+      y0: rowHeight * cell.row,
+      y1: rowHeight * (cell.row + 1),
+      unit: rowHeight * (size / baseSize),
+    });
 
   ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = "#000";
@@ -382,6 +317,7 @@ export function renderNameplate(
 
     if (wrapped && wrapped.size > fit.size) {
       fits[cell.key] = { ...wrapped.fits[0], size: wrapped.size, stage: "wrap" };
+      addRegion(cell, wrapped.size);
       const { ascent, descent } = bodyMetrics(ctx, style.fontFamily, wrapped.size);
       const body = ascent + descent;
       const gap = body * WRAP_GAP;
@@ -397,6 +333,7 @@ export function renderNameplate(
     }
 
     fits[cell.key] = fit;
+    addRegion(cell, fit.size);
     // 행 한가운데에 한글 몸체가 오도록 기준선을 잡는다.
     const { ascent, descent } = bodyMetrics(ctx, style.fontFamily, fit.size);
     const baseline = rowTop + rowHeight / 2 + (ascent - descent) / 2;
@@ -411,13 +348,14 @@ export function renderNameplate(
     ctx.strokeRect(bw / 2, bw / 2, width - bw, height - bw);
   }
 
-  applyInkTexture(plate, style.inkTexture);
-
-  // 검게 그린 글자를 잉크 색으로 갈아끼운다.
-  ctx.globalCompositeOperation = "source-in";
-  ctx.fillStyle = style.color;
-  ctx.fillRect(0, 0, width, height);
-  ctx.globalCompositeOperation = "source-over";
+  // 검게 그린 글자를 고무인으로 찍은 인영으로 바꾸고 잉크 색을 입힌다.
+  applyStamp(plate, {
+    color: style.color,
+    unit: rowHeight,
+    regions,
+    rows: ROWS,
+    seed: style.inkSeed,
+  });
 
   if (Math.abs(style.rotationDeg) < 0.01) {
     return { canvas: plate, widthMm: style.widthMm, heightMm: height / pxPerMm, fits };

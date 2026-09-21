@@ -63,6 +63,8 @@ export function NameplateStudio({ fonts }: { fonts: FontOption[] }) {
   const [widthMm, setWidthMm] = useState(DEFAULT_STYLE.widthMm);
   const [color, setColor] = useState(DEFAULT_STYLE.color);
   const [tilt, setTilt] = useState(0);
+  // 인영 모양은 페이지를 열 때 한 번 정하고, 글자를 고쳐도 바꾸지 않는다.
+  const [inkSeed] = useState(() => Math.floor(Math.random() * 2 ** 31));
   const [paperBackdrop, setPaperBackdrop] = useState(true);
   const [size, setSize] = useState({ w: 0, h: 0, mmW: 0, mmH: 0 });
   const [fits, setFits] = useState<Partial<Record<keyof NameplateContent, Fit>>>({});
@@ -80,9 +82,16 @@ export function NameplateStudio({ fonts }: { fonts: FontOption[] }) {
   const fullStyle: NameplateStyle | null = useMemo(
     () =>
       font
-        ? { ...DEFAULT_STYLE, widthMm, color, rotationDeg: tilt, fontFamily: font.family }
+        ? {
+            ...DEFAULT_STYLE,
+            widthMm,
+            color,
+            rotationDeg: tilt,
+            inkSeed,
+            fontFamily: font.family,
+          }
         : null,
-    [font, widthMm, color, tilt],
+    [font, widthMm, color, tilt, inkSeed],
   );
 
   useEffect(() => {
