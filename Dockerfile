@@ -23,6 +23,7 @@ RUN addgroup -S -g 1001 nodejs \
  && adduser -S -u 1001 -G nodejs nextjs
 
 # output: "standalone" 으로 빌드된 최소 번들만 옮긴다.
+# public/ 은 비어 있어도 유지한다. 지우면 이 COPY 가 깨진다(.gitkeep 참고).
 COPY --from=builder /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
