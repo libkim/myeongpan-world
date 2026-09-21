@@ -16,7 +16,7 @@
  */
 
 /** 인영 강도. 조절은 이 값들만 바꾸면 된다. 길이 단위는 행 높이 대비 비율. */
-export type StampStyle = "rough" | "soft";
+export type StampStyle = "rough" | "carved" | "watercolor" | "charcoal" | "spray";
 
 /** 거친 인영 — 테두리를 거의 이진화해 또렷하고 거칠게 */
 export const STAMP = {
@@ -55,35 +55,6 @@ export const STAMP = {
   // 가독성
   minLegible: 0.82, // 행마다 원래 글자 픽셀 중 잉크가 남아야 하는 비율
 };
-
-/**
- * 번짐 인영 — 문턱으로 자르지 않고 경계를 1~2px 에 걸쳐 부드럽게 넘긴다.
- * 테두리 요철은 크게 잡아 매끈한 물결이 되고, 글자 밖으로 잉크가 옅게 스민다.
- */
-export const STAMP_SOFT: typeof STAMP = {
-  ...STAMP,
-  warpAmp: 0.012,
-  roundRadius: 0.009,
-  spread: 0.47,
-  edgeRoughScale: 0.03,
-  edgeRough: 0.06,
-  edgeBand: 0.06,
-  rimDecay: 0.03,
-  rimInner: 0.74,
-  voidScale: 0.02,
-  voidBase: 0.6,
-  voidAlpha: 0.15,
-  voidSoft: 0.1,
-  grainX: 0.012,
-  grainY: 0.06,
-  grain: 0.08,
-  mottle: 0.2,
-  haloAlpha: 0.1,
-  haloRadius: 0.012,
-  inkBoost: 1.3,
-};
-
-const STYLES: Record<StampStyle, typeof STAMP> = { rough: STAMP, soft: STAMP_SOFT };
 
 /* ---------- 시드 고정 난수와 Perlin 잡음 ---------- */
 
@@ -314,7 +285,23 @@ export function applyStamp(canvas: HTMLCanvasElement, opts: StampOptions): void 
   if (!ctx) return;
   const { width: w, height: h } = canvas;
   const u = opts.unit;
-  const P = STYLES[opts.style ?? "rough"];
+  switch (opts.style) {
+    case "carved":
+      applyCarved(canvas, opts);
+      return;
+    case "watercolor":
+      applyWatercolor(canvas, opts);
+      return;
+    case "charcoal":
+      applyCharcoal(canvas, opts);
+      return;
+    case "spray":
+      applySpray(canvas, opts);
+      return;
+    default:
+      break;
+  }
+  const P = STAMP;
   const image = ctx.getImageData(0, 0, w, h);
   const px = image.data;
 
@@ -474,4 +461,487 @@ export function applyStamp(canvas: HTMLCanvasElement, opts: StampOptions): void 
 /** 행 높이 대비 비율을 px 로. 잡음 좌표를 나눌 때 0 이 되지 않게 최소 1px. */
 function S(ratio: number, unit: number): number {
   return Math.max(1, ratio * unit);
+}
+
+/* ======================================================================
+ * 새김 인영 — 거리장(SDF) 방식
+ *
+ * 글자를 2배 해상도로 올려 모든 픽셀에서 테두리까지의 부호 있는 거리를 구하고,
+ * 도장 효과(요철·두께·섬유)를 픽셀이 아니라 이 거리값을 흔들어 넣는다.
+ * 마지막에 경계를 정확히 1px 폭으로만 넘기고 원래 크기로 줄여서
+ * 문턱으로 자른 계단도, 블러로 푼 흐림도 생기지 않는다.
+ * ==================================================================== */
+
+/** 새김 인영 강도. 길이 단위는 행 높이 대비 비율 */
+export const CARVED = {
+  scale: 2, // 거리장을 계산하는 배율
+  grow: 0.01, // 획이 두꺼워지는 정도
+  wobbleScale: 0.18, // 새김 윤곽이 크게 휘는 물결 크기
+  wobbleAmp: 0.01,
+  rippleScale: 0.04, // 잔물결
+  rippleAmp: 0.004,
+  fiberScale: 0.01, // 테두리의 섬유 요철 (선명하게 남는다)
+  fiberAmp: 0.004,
+  rimDecay: 0.025, // 테두리에서 속으로 옅어지는 거리
+  rimInner: 0.7,
+  pressureMin: 0.5,
+  blotScale: 0.9,
+  voidScale: 0.028, // 흰 점 크기
+  voidBase: 0.62,
+  voidByPressure: 0.3,
+  voidAlpha: 0.12,
+  voidEdge: 0.06, // 흰 점 가장자리 폭 (잡음 값 기준)
+  grainX: 0.006,
+  grainY: 0.05,
+  grain: 0.12,
+  darken: 0.3,
+  inkBoost: 1.25,
+  minLegible: 0.82,
+};
+
+/** Felzenszwalb 1D 제곱 거리 변환 */
+function edt1d(f: Float64Array, n: number, d: Float64Array, v: Int32Array, z: Float64Array) {
+  let k = 0;
+  v[0] = 0;
+  z[0] = -Infinity;
+  z[1] = Infinity;
+  for (let q = 1; q < n; q += 1) {
+    let s = (f[q] + q * q - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
+    while (s <= z[k]) {
+      k -= 1;
+      s = (f[q] + q * q - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
+    }
+    k += 1;
+    v[k] = q;
+    z[k] = s;
+    z[k + 1] = Infinity;
+  }
+  k = 0;
+  for (let q = 0; q < n; q += 1) {
+    while (z[k + 1] < q) k += 1;
+    const dq = q - v[k];
+    d[q] = dq * dq + f[v[k]];
+  }
+}
+
+/** feature 가 1 인 픽셀까지의 정확한 유클리드 거리 */
+function distanceTo(feature: Uint8Array, w: number, h: number): Float32Array {
+  const INF = 1e20;
+  const n = Math.max(w, h);
+  const f = new Float64Array(n);
+  const d = new Float64Array(n);
+  const v = new Int32Array(n);
+  const z = new Float64Array(n + 1);
+  const g = new Float32Array(w * h);
+  for (let x = 0; x < w; x += 1) {
+    for (let y = 0; y < h; y += 1) f[y] = feature[y * w + x] ? 0 : INF;
+    edt1d(f, h, d, v, z);
+    for (let y = 0; y < h; y += 1) g[y * w + x] = d[y];
+  }
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < w; x += 1) f[x] = g[y * w + x];
+    edt1d(f, w, d, v, z);
+    for (let x = 0; x < w; x += 1) g[y * w + x] = Math.sqrt(d[x]);
+  }
+  return g;
+}
+
+function applyCarved(canvas: HTMLCanvasElement, opts: StampOptions): void {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  const P = CARVED;
+  const { width: w, height: h } = canvas;
+  const u = opts.unit;
+  const image = ctx.getImageData(0, 0, w, h);
+  const px = image.data;
+
+  const src = new Float32Array(w * h);
+  for (let i = 0; i < src.length; i += 1) src[i] = px[i * 4 + 3] / 255;
+
+  const unitMap = new Float32Array(w * h).fill(u);
+  for (const r of opts.regions ?? []) {
+    const ya = Math.max(0, Math.floor(r.y0));
+    const yb = Math.min(h, Math.ceil(r.y1));
+    const xa = Math.max(0, Math.floor(r.x0));
+    const xb = Math.min(w, Math.ceil(r.x1));
+    for (let y = ya; y < yb; y += 1) unitMap.fill(r.unit, y * w + xa, y * w + xb);
+  }
+
+  // 1. 2배 해상도에서 글자 안/밖을 나누고 부호 있는 거리를 구한다.
+  const s = P.scale;
+  const W = w * s;
+  const H = h * s;
+  const inside = new Uint8Array(W * H);
+  const outside = new Uint8Array(W * H);
+  for (let y = 0; y < H; y += 1) {
+    for (let x = 0; x < W; x += 1) {
+      const on = sample(src, w, h, (x + 0.5) / s - 0.5, (y + 0.5) / s - 0.5) > 0.5;
+      inside[y * W + x] = on ? 1 : 0;
+      outside[y * W + x] = on ? 0 : 1;
+    }
+  }
+  const toInk = distanceTo(inside, W, H); // 밖 → 잉크까지
+  const toPaper = distanceTo(outside, W, H); // 안 → 종이까지
+
+  // 2. 거리값을 흔들어 새김 모양을 만든다 (단위: 2배 해상도 px).
+  const nWob = new Perlin(opts.seed + 11);
+  const nRip = new Perlin(opts.seed + 12);
+  const nFib = new Perlin(opts.seed + 13);
+  const wob = S(P.wobbleScale, u) * s;
+  const rip = S(P.rippleScale, u) * s;
+  const low = coarseField(W, H, Math.max(2, Math.round(rip / 4)), (x, y) => {
+    return (nWob.fbm(x / wob, y / wob, 2) - 0.5) * 2 * P.wobbleAmp +
+      (nRip.fbm(x / rip, y / rip, 2) - 0.5) * 2 * P.rippleAmp;
+  });
+
+  const shapeHi = new Float32Array(W * H);
+  const depthHi = new Float32Array(W * H);
+  for (let y = 0; y < H; y += 1) {
+    const sy = Math.min(h - 1, Math.floor(y / s));
+    for (let x = 0; x < W; x += 1) {
+      const i = y * W + x;
+      const un = unitMap[sy * w + Math.min(w - 1, Math.floor(x / s))] * s;
+      let sd = inside[i] ? -(toPaper[i] - 0.5) : toInk[i] - 0.5;
+      // 경계 근처만 잔 섬유 요철을 계산한다 (멀리선 결과에 영향이 없다).
+      const reach = (P.grow + P.wobbleAmp + P.rippleAmp + P.fiberAmp) * un + s * 2;
+      if (sd > reach) continue;
+      sd -= P.grow * un;
+      sd += low[i] * un;
+      if (Math.abs(sd) < P.fiberAmp * un + s * 2) {
+        const fs = Math.max(1, P.fiberScale * un);
+        sd += (nFib.fbm(x / fs, y / fs, 2) - 0.5) * 2 * P.fiberAmp * un;
+      }
+      // 경계를 최종 해상도 기준 정확히 1px 폭으로만 넘긴다.
+      shapeHi[i] = 1 - smoothstep(-s / 2, s / 2, sd);
+      depthHi[i] = Math.max(0, -sd) / s;
+    }
+  }
+
+  // 3. 원래 크기로 줄인다 (s×s 평균 → 안티에일리어싱).
+  const shape = new Float32Array(w * h);
+  const depth = new Float32Array(w * h);
+  const inv = 1 / (s * s);
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < w; x += 1) {
+      let a = 0;
+      let dsum = 0;
+      for (let yy = 0; yy < s; yy += 1) {
+        const row = (y * s + yy) * W + x * s;
+        for (let xx = 0; xx < s; xx += 1) {
+          a += shapeHi[row + xx];
+          dsum += depthHi[row + xx];
+        }
+      }
+      shape[y * w + x] = a * inv;
+      depth[y * w + x] = dsum * inv;
+    }
+  }
+
+  // 4. 잉크: 테두리 고임 · 압력 · 흰 점 · 종이 결.
+  const rand = mulberry32(opts.seed + 16);
+  const nBlot = new Perlin(opts.seed + 14);
+  const nVoid = new Perlin(opts.seed + 15);
+  const nGrain = new Perlin(opts.seed + 17);
+  const angle = rand() * Math.PI * 2;
+  const gx = Math.cos(angle);
+  const gy = Math.sin(angle);
+  const half = Math.hypot(w, h) / 2;
+  const bs = S(P.blotScale, u);
+  const pressureRaw = coarseField(w, h, Math.max(4, Math.round(bs / 8)), (x, y) => {
+    const ramp = 0.5 + 0.5 * (((x - w / 2) * gx + (y - h / 2) * gy) / half);
+    return 0.55 * ramp + 0.45 * nBlot.fbm(x / bs, y / bs, 3);
+  });
+
+  const rowH = h / opts.rows;
+  let out = new Float32Array(w * h);
+  for (let k = 1; k >= 0; k -= 0.25) {
+    out = new Float32Array(w * h);
+    const pMin = 1 - (1 - P.pressureMin) * k;
+    const legible = new Float64Array(opts.rows);
+    const original = new Float64Array(opts.rows);
+    for (let y = 0; y < h; y += 1) {
+      const row = Math.min(opts.rows - 1, Math.floor(y / rowH));
+      for (let x = 0; x < w; x += 1) {
+        const i = y * w + x;
+        if (src[i] > 0.5) original[row] += 1;
+        const m = shape[i];
+        if (m <= 0) continue;
+        const ui = unitMap[i];
+        const rim = P.rimInner + (1 - P.rimInner) * Math.exp(-depth[i] / (P.rimDecay * ui));
+        const pressure = pMin + (1 - pMin) * Math.min(1, Math.max(0, pressureRaw[i]));
+        const th = P.voidBase + P.voidByPressure * pressure + (1 - k) * 0.4;
+        const vs = S(P.voidScale, ui);
+        const vn = nVoid.fbm(x / vs, y / vs, 3);
+        const hole = 1 - (1 - P.voidAlpha) * smoothstep(th, th + P.voidEdge, vn);
+        const grain =
+          1 - P.grain * nGrain.fbm(x / S(P.grainX, ui), y / S(P.grainY, ui), 2);
+        const a = Math.min(1, m * rim * pressure * hole * grain * P.inkBoost);
+        out[i] = a;
+        if (src[i] > 0.5 && a > 0.25) legible[row] += 1;
+      }
+    }
+    let ok = true;
+    for (let r = 0; r < opts.rows; r += 1) {
+      if (original[r] > 0 && legible[r] / original[r] < P.minLegible) ok = false;
+    }
+    if (ok) break;
+  }
+
+  const [cr, cg, cb] = hexToRgb(opts.color);
+  for (let i = 0; i < out.length; i += 1) {
+    const a = out[i];
+    const j = i * 4;
+    if (a <= 0) {
+      px[j + 3] = 0;
+      continue;
+    }
+    const shade = 1 + P.darken * (0.55 - Math.min(1, a / Math.max(shape[i], 1e-3)));
+    px[j] = Math.min(255, cr * shade);
+    px[j + 1] = Math.min(255, cg * shade);
+    px[j + 2] = Math.min(255, cb * shade);
+    px[j + 3] = Math.round(Math.min(1, a) * 255);
+  }
+  ctx.putImageData(image, 0, 0);
+}
+
+/* ======================================================================
+ * p5.brush 계열 스타일 — 수채 · 목탄 · 스프레이
+ *
+ * 세 스타일 모두 글자의 부호 있는 거리(sd, 원래 해상도 px, 안쪽이 음수)를 바탕으로
+ * 모양을 만든다. 경계는 sd 를 1px 폭으로만 넘겨서 선명하게 남는다.
+ * ==================================================================== */
+
+/** 2배 해상도에서 구한 부호 있는 거리를 원래 해상도로 줄여 돌려준다. */
+function signedDistance(src: Float32Array, w: number, h: number, s = 2): Float32Array {
+  const W = w * s;
+  const H = h * s;
+  const inside = new Uint8Array(W * H);
+  const outside = new Uint8Array(W * H);
+  for (let y = 0; y < H; y += 1) {
+    for (let x = 0; x < W; x += 1) {
+      const on = sample(src, w, h, (x + 0.5) / s - 0.5, (y + 0.5) / s - 0.5) > 0.5;
+      inside[y * W + x] = on ? 1 : 0;
+      outside[y * W + x] = on ? 0 : 1;
+    }
+  }
+  const toInk = distanceTo(inside, W, H);
+  const toPaper = distanceTo(outside, W, H);
+  const sd = new Float32Array(w * h);
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < w; x += 1) {
+      let acc = 0;
+      for (let yy = 0; yy < s; yy += 1) {
+        for (let xx = 0; xx < s; xx += 1) {
+          const i = (y * s + yy) * W + x * s + xx;
+          acc += inside[i] ? -(toPaper[i] - 0.5) : toInk[i] - 0.5;
+        }
+      }
+      sd[y * w + x] = acc / (s * s) / s;
+    }
+  }
+  return sd;
+}
+
+function buildUnitMap(opts: StampOptions, w: number, h: number): Float32Array {
+  const unitMap = new Float32Array(w * h).fill(opts.unit);
+  for (const r of opts.regions ?? []) {
+    const ya = Math.max(0, Math.floor(r.y0));
+    const yb = Math.min(h, Math.ceil(r.y1));
+    const xa = Math.max(0, Math.floor(r.x0));
+    const xb = Math.min(w, Math.ceil(r.x1));
+    for (let y = ya; y < yb; y += 1) unitMap.fill(r.unit, y * w + xa, y * w + xb);
+  }
+  return unitMap;
+}
+
+/** 경계를 1px 폭으로 넘기는 덮임 비율. d 는 px, 안쪽이 음수 */
+const cover = (d: number) => 1 - smoothstep(-0.5, 0.5, d);
+
+function writeInk(px: Uint8ClampedArray, out: Float32Array, color: string, darken: number) {
+  const [cr, cg, cb] = hexToRgb(color);
+  for (let i = 0; i < out.length; i += 1) {
+    const a = Math.min(1, out[i]);
+    const j = i * 4;
+    if (a <= 0) {
+      px[j + 3] = 0;
+      continue;
+    }
+    const shade = 1 + darken * (a - 0.6);
+    px[j] = Math.min(255, cr * (2 - shade));
+    px[j + 1] = Math.min(255, cg * (2 - shade));
+    px[j + 2] = Math.min(255, cb * (2 - shade));
+    px[j + 3] = Math.round(a * 255);
+  }
+}
+
+interface InkContext {
+  w: number;
+  h: number;
+  u: number;
+  sd: Float32Array;
+  unitMap: Float32Array;
+  src: Float32Array;
+}
+
+function prepare(canvas: HTMLCanvasElement, opts: StampOptions) {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  const { width: w, height: h } = canvas;
+  const image = ctx.getImageData(0, 0, w, h);
+  const src = new Float32Array(w * h);
+  for (let i = 0; i < src.length; i += 1) src[i] = image.data[i * 4 + 3] / 255;
+  const ink: InkContext = {
+    w,
+    h,
+    u: opts.unit,
+    sd: signedDistance(src, w, h),
+    unitMap: buildUnitMap(opts, w, h),
+    src,
+  };
+  return { ctx, image, ink };
+}
+
+/** 수채 — 조금씩 다르게 일그러진 반투명 층을 겹친다. 층 테두리에 안료가 모여 진해진다. */
+export const WATERCOLOR = {
+  layers: 11,
+  layerAlpha: 0.07,
+  spreadMin: -0.022, // 층마다 번지는 범위 (행 높이 대비, 음수는 안쪽으로)
+  spreadMax: 0.02,
+  deformScale: 0.2,
+  deformAmp: 0.03,
+  detailScale: 0.05,
+  detailAmp: 0.01,
+  edgePool: 1.8, // 층 테두리에 모이는 안료
+  edgeWidth: 0.009,
+  grain: 0.12,
+};
+
+function applyWatercolor(canvas: HTMLCanvasElement, opts: StampOptions) {
+  const prep = prepare(canvas, opts);
+  if (!prep) return;
+  const { ctx, image, ink } = prep;
+  const { w, h, u, sd, unitMap } = ink;
+  const P = WATERCOLOR;
+  const out = new Float32Array(w * h);
+  const big = S(P.deformScale, u);
+  const small = S(P.detailScale, u);
+  const layerRand = mulberry32(opts.seed + 99);
+  for (let l = 0; l < P.layers; l += 1) {
+    const nA = new Perlin(opts.seed + 100 + l * 2);
+    const nB = new Perlin(opts.seed + 101 + l * 2);
+    // 번지는 범위를 층마다 무작위로 섞어, 둘레가 한 겹의 띠가 아니라 여러 겹의 물 자국이 되게 한다.
+    const spread = P.spreadMin + (P.spreadMax - P.spreadMin) * layerRand();
+    const field = coarseField(w, h, Math.max(2, Math.round(small / 4)), (x, y) => {
+      return (nA.fbm(x / big, y / big, 2) - 0.5) * 2 * P.deformAmp +
+        (nB.fbm(x / small, y / small, 2) - 0.5) * 2 * P.detailAmp;
+    });
+    for (let i = 0; i < out.length; i += 1) {
+      const un = unitMap[i];
+      const d = sd[i] - spread * un + field[i] * un;
+      if (d > 1) continue;
+      const c = cover(d);
+      const pool = Math.exp(-Math.max(0, -d) / Math.max(0.8, P.edgeWidth * un));
+      out[i] += P.layerAlpha * c * (1 + P.edgePool * pool);
+    }
+  }
+  const nG = new Perlin(opts.seed + 150);
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < w; x += 1) {
+      const i = y * w + x;
+      if (out[i] <= 0) continue;
+      const g = S(0.006, unitMap[i]);
+      out[i] *= 1 - P.grain * nG.fbm(x / g, y / (g * 3), 2);
+    }
+  }
+  writeInk(image.data, out, opts.color, 0.35);
+  ctx.putImageData(image, 0, 0);
+}
+
+/** 목탄 — 종이 결의 돌기에만 가루가 걸린다. 누르는 힘이 약한 쪽은 더 성기다. */
+export const CHARCOAL = {
+  grow: 0.006,
+  toothX: 0.013, // 종이 돌기 가로 크기
+  toothY: 0.035, // 세로 크기 (결이 세로로 길다)
+  base: 0.34, // 결 사이에도 남는 가루
+  thresholdLow: 0.3, // 세게 누른 곳의 문턱
+  thresholdHigh: 0.62, // 약하게 누른 곳의 문턱
+  soft: 0.16,
+  edgeDark: 0.25, // 테두리가 조금 더 진하다
+  edgeWidth: 0.02,
+  blotScale: 0.8,
+};
+
+function applyCharcoal(canvas: HTMLCanvasElement, opts: StampOptions) {
+  const prep = prepare(canvas, opts);
+  if (!prep) return;
+  const { ctx, image, ink } = prep;
+  const { w, h, u, sd, unitMap } = ink;
+  const P = CHARCOAL;
+  const nT = new Perlin(opts.seed + 200);
+  const nT2 = new Perlin(opts.seed + 201);
+  const nP = new Perlin(opts.seed + 202);
+  const bs = S(P.blotScale, u);
+  const press = coarseField(w, h, Math.max(4, Math.round(bs / 8)), (x, y) => nP.fbm(x / bs, y / bs, 3));
+  const out = new Float32Array(w * h);
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < w; x += 1) {
+      const i = y * w + x;
+      const un = unitMap[i];
+      const d = sd[i] - P.grow * un;
+      if (d > 1) continue;
+      const c = cover(d);
+      const tx = S(P.toothX, un);
+      const ty = S(P.toothY, un);
+      const tooth = 0.65 * nT.fbm(x / tx, y / ty, 2) + 0.35 * nT2.fbm(x / (tx * 0.5), y / (ty * 0.5), 1);
+      const p = Math.min(1, Math.max(0, press[i]));
+      const t = P.thresholdHigh - (P.thresholdHigh - P.thresholdLow) * p;
+      const dust = P.base + (1 - P.base) * smoothstep(t, t + P.soft, tooth);
+      const edge = 1 + P.edgeDark * Math.exp(-Math.max(0, -d) / Math.max(0.8, P.edgeWidth * un));
+      out[i] = c * dust * edge;
+    }
+  }
+  writeInk(image.data, out, opts.color, 0.25);
+  ctx.putImageData(image, 0, 0);
+}
+
+/** 스프레이 — 글자 속은 알갱이가 촘촘하고, 둘레로 갈수록 알갱이가 성기게 흩뿌려진다. */
+export const SPRAY = {
+  grow: 0.004,
+  coreDensity: 0.78, // 글자 속 알갱이 밀도
+  dotScale: 0.012, // 알갱이 크기 (행 높이 대비)
+  fringe: 0.05, // 둘레로 흩뿌려지는 거리
+  fringeDensity: 0.55, // 테두리 바로 바깥의 알갱이 밀도
+  dotAlpha: 0.9,
+};
+
+function applySpray(canvas: HTMLCanvasElement, opts: StampOptions) {
+  const prep = prepare(canvas, opts);
+  if (!prep) return;
+  const { ctx, image, ink } = prep;
+  const { w, h, sd, unitMap } = ink;
+  const P = SPRAY;
+  const nD = new Perlin(opts.seed + 400);
+  const nD2 = new Perlin(opts.seed + 401);
+  const out = new Float32Array(w * h);
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < w; x += 1) {
+      const i = y * w + x;
+      const un = unitMap[i];
+      const d = sd[i] - P.grow * un;
+      const reach = P.fringe * un;
+      if (d > reach) continue;
+      // 이 자리에 알갱이가 있을 확률: 속은 coreDensity, 바깥은 거리에 따라 줄어든다.
+      const density =
+        d <= 0 ? P.coreDensity : P.fringeDensity * Math.pow(1 - d / reach, 2.2);
+      const ds = S(P.dotScale, un);
+      const n = 0.6 * nD.fbm(x / ds, y / ds, 1) + 0.4 * nD2.fbm(x / (ds * 0.5), y / (ds * 0.5), 1);
+      const t = 1 - density;
+      const dot = smoothstep(t - 0.04, t + 0.04, n);
+      // 속은 알갱이 사이도 옅게 채워 글자가 끊기지 않게 한다.
+      const fill = d <= 0 ? 0.45 * cover(d) : 0;
+      out[i] = Math.max(fill, dot * P.dotAlpha);
+    }
+  }
+  writeInk(image.data, out, opts.color, 0.2);
+  ctx.putImageData(image, 0, 0);
 }

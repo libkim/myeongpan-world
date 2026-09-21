@@ -260,7 +260,10 @@ export function NameplateStudio({ fonts }: { fonts: FontOption[] }) {
             {(
               [
                 ["rough", "거친 인영"],
-                ["soft", "번짐 인영"],
+                ["carved", "새김 인영"],
+                ["watercolor", "수채"],
+                ["charcoal", "목탄"],
+                ["spray", "스프레이"],
               ] as const
             ).map(([value, label]) => (
               <Button
