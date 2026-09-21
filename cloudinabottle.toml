@@ -1,0 +1,25 @@
+[app]
+name = "myeongpan-world"
+version = "0.1.0"
+description = "사업자등록증 정보로 배경이 투명한 사업자명판 이미지를 만드는 웹앱"
+
+[runtime.container]
+image = "Dockerfile"
+port = 3000
+
+[routing]
+health_check = "/"
+# 누구나 로그인 없이 쓰는 공개 도구이므로 전체 경로를 열어 둔다.
+public_paths = ["/"]
+
+[resources]
+memory_mb = 256
+# npm ci 와 next build 는 실행 시보다 훨씬 많은 메모리를 쓴다.
+# 기본값(memory_mb)으로는 빌드 도중 OOM 으로 죽는다.
+build_memory_mb = 4096
+cpu_cores = 0.5
+
+[data]
+# 명판은 브라우저 안에서만 만들어지고 입력값을 저장하지 않으므로
+# 영구 데이터 디렉터리를 받지 않는다.
+app_data = false

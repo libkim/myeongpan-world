@@ -30,6 +30,11 @@ docker run --rm -p 3000:3000 myeongpan-world
 
 http://localhost:3000 에서 열립니다.
 
+### Cloud in a Bottle
+
+`cloudinabottle.toml` 이 함께 들어 있습니다. 인증 없이 누구나 쓰는 공개 앱으로 선언돼 있습니다
+(`routing.public_paths = ["/"]`).
+
 ### 로컬 개발
 
 ```bash
