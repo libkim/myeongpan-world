@@ -7,7 +7,14 @@
  * 그래도 최소 글자 크기 아래로 내려가면 두 줄로 나눈다.
  */
 
-import { chooseLineBreak, fitText, fittedWidth, type Fit, type FitLimits } from "./fit";
+import {
+  chooseLineBreak,
+  fitText,
+  fittedWidth,
+  glyphAdvance,
+  type Fit,
+  type FitLimits,
+} from "./fit";
 
 export interface NameplateContent {
   /** 사업자등록번호 */
@@ -75,12 +82,22 @@ interface Cell {
   align: Align;
   /** 너무 작아지면 두 줄로 나눠도 되는 칸인지 */
   wrap: boolean;
+  /** 두 줄로 나눌 때 띄어쓰기에서만 끊을지 */
+  wrapAtSpaceOnly?: boolean;
 }
 
 const CELLS: Cell[] = [
   { key: "bizNumber", row: 0, x0: 0, x1: 1, align: "justify", wrap: false },
   { key: "companyName", row: 1, x0: 0, x1: cellWidth(35.8), align: "left", wrap: true },
-  { key: "ownerName", row: 1, x0: 1 - cellWidth(29.2), x1: 1, align: "right", wrap: false },
+  {
+    key: "ownerName",
+    row: 1,
+    x0: 1 - cellWidth(29.2),
+    x1: 1,
+    align: "right",
+    wrap: true,
+    wrapAtSpaceOnly: true,
+  },
   { key: "address", row: 2, x0: 0, x1: 1, align: "justify", wrap: true },
   { key: "businessType", row: 3, x0: 0, x1: cellWidth(28.8), align: "left", wrap: true },
   { key: "businessItem", row: 3, x0: 1 - cellWidth(35.8), x1: 1, align: "right", wrap: true },
@@ -94,6 +111,8 @@ const CELL_INSET = 0.12;
 /** 두 줄일 때 두 줄 묶음이 차지하는 행 높이 비율과, 한글 몸체 높이 대비 줄 간격 */
 const WRAP_FILL = 0.84;
 const WRAP_GAP = 0.25;
+/** '성명 자간 넓히기' 를 켰을 때 쓰는 자간 (글자 크기 대비) */
+const NAME_TRACKING = 0.4;
 
 export const DEFAULT_CONTENT: NameplateContent = {
   bizNumber: "123-45-67890",
@@ -123,12 +142,8 @@ function setFont(ctx: CanvasRenderingContext2D, family: string, size: number) {
   ctx.font = `${size}px ${family}`;
 }
 
-function cellText(content: NameplateContent, style: NameplateStyle, key: keyof NameplateContent) {
-  const raw = content[key].trim();
-  if (key === "ownerName" && style.spaceOutOwnerName) {
-    return raw.replace(/\s+/g, "").split("").join(" ");
-  }
-  return raw;
+function cellText(content: NameplateContent, key: keyof NameplateContent) {
+  return content[key].trim().replace(/\s+/g, " ");
 }
 
 function bodyMetrics(ctx: CanvasRenderingContext2D, family: string, size: number) {
@@ -143,7 +158,10 @@ function bodyMetrics(ctx: CanvasRenderingContext2D, family: string, size: number
 interface WrappedLine {
   chars: string[];
   widths: number[];
+  fixed: boolean[];
 }
+
+const spaceMask = (chars: string[]) => chars.map((c) => c === " ");
 
 /** 두 줄로 나눠 맞춘다. 두 줄은 같은 크기로 쓰고, 긴 줄 기준으로 크기를 정한다. */
 function wrapInTwo(
@@ -153,8 +171,9 @@ function wrapInTwo(
   rowHeight: number,
   bodyRatio: number,
   limits: FitLimits,
+  opts: { spacesOnly: boolean; preferredTracking: number },
 ): { size: number; lines: WrappedLine[]; fits: Fit[] } | null {
-  const at = chooseLineBreak(chars, unitWidths);
+  const at = chooseLineBreak(chars, unitWidths, opts.spacesOnly);
   if (at === null) return null;
 
   const trim = (from: number, to: number): WrappedLine => {
@@ -162,15 +181,19 @@ function wrapInTwo(
     let b = to;
     while (a < b && chars[a] === " ") a += 1;
     while (b > a && chars[b - 1] === " ") b -= 1;
-    return { chars: chars.slice(a, b), widths: unitWidths.slice(a, b) };
+    const part = chars.slice(a, b);
+    return { chars: part, widths: unitWidths.slice(a, b), fixed: spaceMask(part) };
   };
   const lines = [trim(0, at), trim(at, chars.length)];
   if (lines.some((l) => l.chars.length === 0)) return null;
 
   const base = (rowHeight * WRAP_FILL) / (bodyRatio * (2 + WRAP_GAP));
-  const size = Math.min(...lines.map((l) => fitText(l.widths, maxWidth, base, limits, false).size));
+  const t = opts.preferredTracking;
+  const size = Math.min(
+    ...lines.map((l) => fitText(l.widths, maxWidth, base, limits, false, t, l.fixed).size),
+  );
   // 정한 크기를 기본값으로 두고 다시 맞춰, 짧은 줄은 덜 좁히게 한다.
-  const fits = lines.map((l) => fitText(l.widths, maxWidth, size, limits, false));
+  const fits = lines.map((l) => fitText(l.widths, maxWidth, size, limits, false, t, l.fixed));
   return { size, lines, fits };
 }
 
@@ -196,7 +219,7 @@ function drawFitted(
     }
     ctx.fillText(ch, 0, 0);
     ctx.restore();
-    cursor += unitWidths[i] * fit.size * fit.scaleX + fit.tracking;
+    cursor += glyphAdvance(unitWidths[i], fit, ch === " ") + fit.tracking;
   });
 }
 
@@ -320,9 +343,17 @@ export function renderNameplate(
   ctx.textBaseline = "alphabetic";
 
   for (const cell of CELLS) {
-    const text = cellText(content, style, cell.key);
+    const text = cellText(content, cell.key);
+    // 성명 자간 넓히기는 공백을 끼우지 않고 '원하는 자간' 으로 준다.
+    // 칸이 좁으면 맞춤 규칙이 이 간격부터 줄인다.
+    // "홍 길 동" 식 표기는 띄어쓰기 없는 이름의 관례라, 띄어쓰기가 있는 이름에는 쓰지 않는다.
+    const preferredTracking =
+      cell.key === "ownerName" && style.spaceOutOwnerName && !text.includes(" ")
+        ? NAME_TRACKING
+        : 0;
     if (!text) continue;
     const chars = Array.from(text);
+    const fixed = spaceMask(chars);
 
     setFont(ctx, style.fontFamily, probe);
     const unitWidths = chars.map((ch) => ctx.measureText(ch).width / probe);
@@ -331,11 +362,22 @@ export function renderNameplate(
     const right = cell.x1 * width - inset;
     const maxWidth = right - left;
     const rowTop = rowHeight * cell.row;
-    const fit = fitText(unitWidths, maxWidth, baseSize, limits, cell.align === "justify");
+    const fit = fitText(
+      unitWidths,
+      maxWidth,
+      baseSize,
+      limits,
+      cell.align === "justify",
+      preferredTracking,
+      fixed,
+    );
 
     const wrapped =
       cell.wrap && fit.size < baseSize * style.minTextScale
-        ? wrapInTwo(chars, unitWidths, maxWidth, rowHeight, bodyRatio, limits)
+        ? wrapInTwo(chars, unitWidths, maxWidth, rowHeight, bodyRatio, limits, {
+            spacesOnly: cell.wrapAtSpaceOnly ?? false,
+            preferredTracking,
+          })
         : null;
 
     if (wrapped && wrapped.size > fit.size) {
@@ -346,7 +388,7 @@ export function renderNameplate(
       const top = rowTop + (rowHeight - (body * 2 + gap)) / 2;
       wrapped.lines.forEach((line, i) => {
         const lf = wrapped.fits[i];
-        const used = fittedWidth(line.widths, lf);
+        const used = fittedWidth(line.widths, lf, line.fixed);
         // 두 줄일 때 양쪽 정렬 칸은 왼쪽 정렬로 바꾼다. 짧은 둘째 줄이 벌어지지 않게.
         const x = cell.align === "right" ? right - used : left;
         drawFitted(ctx, line.chars, line.widths, lf, x, top + i * (body + gap) + ascent, style.weight);
@@ -358,7 +400,7 @@ export function renderNameplate(
     // 행 한가운데에 한글 몸체가 오도록 기준선을 잡는다.
     const { ascent, descent } = bodyMetrics(ctx, style.fontFamily, fit.size);
     const baseline = rowTop + rowHeight / 2 + (ascent - descent) / 2;
-    const used = fittedWidth(unitWidths, fit);
+    const used = fittedWidth(unitWidths, fit, fixed);
     const x = cell.align === "right" ? right - used : left;
     drawFitted(ctx, chars, unitWidths, fit, x, baseline, style.weight);
   }

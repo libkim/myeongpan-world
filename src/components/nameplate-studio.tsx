@@ -347,7 +347,7 @@ export function NameplateStudio({ fonts }: { fonts: FontOption[] }) {
               <ToggleRow
                 id="space-owner"
                 label="성명 자간 넓히기"
-                hint="홍 길 동 처럼 한 글자씩 띄웁니다."
+                hint="홍 길 동 처럼 한 글자씩 띄웁니다. 칸이 좁으면 이 간격부터 줄입니다."
                 checked={style.spaceOutOwnerName}
                 onChange={(v) => updateStyle("spaceOutOwnerName", v)}
               />

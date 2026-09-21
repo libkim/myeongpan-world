@@ -6,6 +6,7 @@
  *   2. 장평(글자 폭)을 줄인다 (최소 장평까지)
  *   3. 그래도 넘치면 그때 글자 크기를 줄인다
  * 칸보다 짧으면 크기는 그대로 두고, 양쪽 정렬 칸만 자간을 벌려 폭을 채운다.
+ * 원하는 자간(preferredTracking)이 있으면 그 간격부터 먼저 줄인 뒤 위 순서를 밟는다.
  */
 
 export interface FitLimits {
@@ -34,6 +35,7 @@ export interface Fit {
  * @param maxWidth 칸의 가용 폭(px)
  * @param baseSize 기본 글자 크기(px)
  * @param justify 짧을 때 자간을 벌려 폭을 채울지
+ * @param preferredTracking 여유가 있을 때 쓸 자간 (글자 크기 대비)
  */
 export function fitText(
   unitWidths: number[],
@@ -41,16 +43,22 @@ export function fitText(
   baseSize: number,
   limits: FitLimits,
   justify: boolean,
+  preferredTracking = 0,
+  fixedMask?: boolean[],
 ): Fit {
   const n = unitWidths.length;
   if (n === 0 || maxWidth <= 0) return { size: baseSize, tracking: 0, scaleX: 1, stage: "fits" };
 
-  const unit = unitWidths.reduce((a, b) => a + b, 0);
+  // 띄어쓰기는 장평으로 줄이지 않는다. 줄이면 단어 경계가 사라진다.
+  const fixed = sumWidths(unitWidths, fixedMask, true);
+  const scalable = sumWidths(unitWidths, fixedMask, false);
+  const unit = fixed + scalable;
   const gaps = n - 1;
   const natural = unit * baseSize;
 
-  if (natural <= maxWidth) {
-    const tracking = justify && gaps > 0 ? (maxWidth - natural) / gaps : 0;
+  const preferredPx = gaps > 0 ? preferredTracking * baseSize : 0;
+  if (natural + preferredPx * gaps <= maxWidth) {
+    const tracking = justify && gaps > 0 ? (maxWidth - natural) / gaps : preferredPx;
     return { size: baseSize, tracking, scaleX: 1, stage: "fits" };
   }
 
@@ -63,13 +71,13 @@ export function fitText(
   const trackingUsed = gaps > 0 ? minTrackingPx : 0;
 
   // 2. 장평
-  const scaleX = (maxWidth - trackingUsed * gaps) / natural;
+  const scaleX = (maxWidth - trackingUsed * gaps - fixed * baseSize) / (scalable * baseSize);
   if (scaleX >= limits.minScaleX) {
     return { size: baseSize, tracking: trackingUsed, scaleX, stage: "scaleX" };
   }
 
   // 3. 크기 — 자간·장평을 한계에 고정한 채 폭이 맞는 크기를 푼다
-  const perPx = unit * limits.minScaleX + (gaps > 0 ? limits.minTracking * gaps : 0);
+  const perPx = scalable * limits.minScaleX + fixed + (gaps > 0 ? limits.minTracking * gaps : 0);
   const size = Math.min(baseSize, maxWidth / Math.max(perPx, 1e-6));
   return {
     size,
@@ -79,11 +87,27 @@ export function fitText(
   };
 }
 
+function sumWidths(widths: number[], mask: boolean[] | undefined, pick: boolean): number {
+  let total = 0;
+  widths.forEach((w, i) => {
+    if ((mask?.[i] ?? false) === pick) total += w;
+  });
+  return total;
+}
+
+/** 글자 하나가 차지하는 폭(px). 고정 글자(띄어쓰기)는 장평을 적용하지 않는다. */
+export function glyphAdvance(unitWidth: number, fit: Fit, isFixed: boolean): number {
+  return unitWidth * fit.size * (isFixed ? 1 : fit.scaleX);
+}
+
 /** 맞춘 결과로 실제 차지하는 폭(px) */
-export function fittedWidth(unitWidths: number[], fit: Fit): number {
+export function fittedWidth(unitWidths: number[], fit: Fit, fixedMask?: boolean[]): number {
   const n = unitWidths.length;
   if (n === 0) return 0;
-  const glyphs = unitWidths.reduce((a, b) => a + b, 0) * fit.size * fit.scaleX;
+  const glyphs = unitWidths.reduce(
+    (sum, w, i) => sum + glyphAdvance(w, fit, fixedMask?.[i] ?? false),
+    0,
+  );
   return glyphs + fit.tracking * (n - 1);
 }
 
@@ -118,9 +142,14 @@ function canBreakInsideWord(chars: string[], at: number): boolean {
  *   1. 띄어쓰기에서 끊는 것이 기본이다.
  *   2. 가장 균형 잡힌 띄어쓰기 분리에서도 짧은 줄이 긴 줄의 MIN_SPACE_BREAK_BALANCE 에
  *      못 미칠 때만 단어 중간에서 끊는다. 이때도 canBreakInsideWord 가 막는 자리는 피한다.
+ * @param spacesOnly 띄어쓰기에서만 나눌지 (이름처럼 단어 중간을 끊으면 안 되는 경우)
  * @returns 둘째 줄이 시작하는 글자 위치. 나눌 수 없으면 null
  */
-export function chooseLineBreak(chars: string[], unitWidths: number[]): number | null {
+export function chooseLineBreak(
+  chars: string[],
+  unitWidths: number[],
+  spacesOnly = false,
+): number | null {
   const n = chars.length;
   if (n < 2) return null;
 
@@ -152,6 +181,7 @@ export function chooseLineBreak(chars: string[], unitWidths: number[]): number |
     }
   }
 
+  if (spacesOnly) return bestSpace?.at ?? null;
   if (bestSpace && (!bestWord || bestSpace.balance >= MIN_SPACE_BREAK_BALANCE)) {
     return bestSpace.at;
   }
