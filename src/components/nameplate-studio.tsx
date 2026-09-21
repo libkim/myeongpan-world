@@ -43,7 +43,10 @@ const FIELDS: Array<{
   { key: "businessItem", label: "종목", placeholder: "소프트웨어 개발 및 공급업" },
 ];
 
-/** 랜덤 기울기 범위(도). 방향도 무작위로 고른다. */
+/** '반듯하게' 에서 쓰는 고정 시드. 언제 열어도 같은 인영이 찍힌다. */
+const FIXED_SEED = 1;
+
+/** '랜덤하게' 의 기울기 범위(도). 방향도 무작위로 고른다. */
 const TILT_MIN = 0.5;
 const TILT_MAX = 1.5;
 
@@ -63,10 +66,11 @@ export function NameplateStudio({ fonts }: { fonts: FontOption[] }) {
   const [fontId, setFontId] = useState(fonts[0]?.id ?? "");
   const [widthMm, setWidthMm] = useState(DEFAULT_STYLE.widthMm);
   const [color, setColor] = useState(DEFAULT_STYLE.color);
-  const [tilt, setTilt] = useState(0);
+  // 재생성: 반듯하게 = 고정 시드 + 기울기 0, 랜덤하게 = 누를 때마다 새 시드 + 새 기울기
+  const [regen, setRegen] = useState({ random: false, seed: FIXED_SEED, tilt: 0 });
+  const tilt = regen.tilt;
+  const inkSeed = regen.seed;
   const [stampStyle, setStampStyle] = useState<StampStyle>(DEFAULT_STYLE.stampStyle);
-  // 인영 모양은 페이지를 열 때 한 번 정하고, 글자를 고쳐도 바꾸지 않는다.
-  const [inkSeed] = useState(() => Math.floor(Math.random() * 2 ** 31));
   const [paperBackdrop, setPaperBackdrop] = useState(true);
   const [size, setSize] = useState({ w: 0, h: 0, mmW: 0, mmH: 0 });
   const [fits, setFits] = useState<Partial<Record<keyof NameplateContent, Fit>>>({});
@@ -105,7 +109,9 @@ export function NameplateStudio({ fonts }: { fonts: FontOption[] }) {
       // next/font 가 붙여주는 Fallback 페이스는 로드에 실패하므로 첫 글꼴만 요청한다.
       // 이때 둘을 한 번에 넘기면 reject 되어 폰트가 준비되기 전에 그려진다.
       const primary = fullStyle.fontFamily.split(",")[0].trim();
-      const used = Object.values(content).join("");
+      // 엔진이 기준 글자 크기를 잴 때 쓰는 "가힣0A" 도 함께 받는다.
+      // 빠지면 첫 렌더만 대체 글꼴로 재서 글자 크기가 조금 달라진다.
+      const used = Object.values(content).join("") + "가힣0A";
       try {
         await document.fonts.load(`400 64px ${primary}`, used);
       } catch {
@@ -175,7 +181,7 @@ export function NameplateStudio({ fonts }: { fonts: FontOption[] }) {
     setFontId(fonts[0]?.id ?? "");
     setWidthMm(DEFAULT_STYLE.widthMm);
     setColor(DEFAULT_STYLE.color);
-    setTilt(0);
+    setRegen({ random: false, seed: FIXED_SEED, tilt: 0 });
     setStampStyle(DEFAULT_STYLE.stampStyle);
   }, [fonts]);
 
@@ -278,24 +284,33 @@ export function NameplateStudio({ fonts }: { fonts: FontOption[] }) {
             ))}
           </ChoiceRow>
 
-          <ChoiceRow label="기울기" note={tilt !== 0 ? `${tilt > 0 ? "+" : ""}${tilt}°` : undefined}>
+          <ChoiceRow
+            label="재생성"
+            note={regen.random ? `${tilt > 0 ? "+" : ""}${tilt}°` : undefined}
+          >
             <Button
               type="button"
               size="sm"
-              variant={tilt === 0 ? "default" : "outline"}
-              onClick={() => setTilt(0)}
+              variant={regen.random ? "outline" : "default"}
+              onClick={() => setRegen({ random: false, seed: FIXED_SEED, tilt: 0 })}
             >
-              똑바로
+              반듯하게
             </Button>
             <Button
               type="button"
               size="sm"
-              variant={tilt !== 0 ? "default" : "outline"}
-              onClick={() => setTilt(randomTilt())}
-              title="누를 때마다 새 각도를 고릅니다"
+              variant={regen.random ? "default" : "outline"}
+              onClick={() =>
+                setRegen({
+                  random: true,
+                  seed: Math.floor(Math.random() * 2 ** 31),
+                  tilt: randomTilt(),
+                })
+              }
+              title="누를 때마다 인영 모양과 기울기를 새로 뽑습니다"
             >
               <Shuffle className="size-3.5" />
-              랜덤 기울기
+              랜덤하게
             </Button>
           </ChoiceRow>
         </CardContent>
