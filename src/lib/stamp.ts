@@ -475,7 +475,7 @@ function S(ratio: number, unit: number): number {
 /** 새김 인영 강도. 길이 단위는 행 높이 대비 비율 */
 export const CARVED = {
   scale: 2, // 거리장을 계산하는 배율
-  grow: 0.01, // 획이 두꺼워지는 정도
+  grow: 0, // 획이 두꺼워지는 정도. 0 이면 원래 폰트 굵기 그대로 (면적 비 약 1.00)
   wobbleScale: 0.18, // 새김 윤곽이 크게 휘는 물결 크기
   wobbleAmp: 0.01,
   rippleScale: 0.04, // 잔물결
