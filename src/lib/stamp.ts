@@ -56,6 +56,13 @@ export const STAMP = {
   minLegible: 0.82, // 행마다 원래 글자 픽셀 중 잉크가 남아야 하는 비율
 };
 
+/**
+ * 압력의 직선 기울기 비중. 도장을 비스듬히 눌러 명판 한쪽이 옅어지는 정도다.
+ * 0.55 였을 때 명판 전체에 필터를 씌운 듯한 그라데이션이 생겨 절반으로 줄였다.
+ * 평균 농도는 그대로 두고 양 끝의 차이만 줄어든다.
+ */
+const PRESS_RAMP = 0.275;
+
 /* ---------- 시드 고정 난수와 Perlin 잡음 ---------- */
 
 function mulberry32(seed: number) {
@@ -388,7 +395,7 @@ export function applyStamp(canvas: HTMLCanvasElement, opts: StampOptions): void 
   const bs = S(P.blotScale, u);
   const pressureRaw = coarseField(w, h, Math.max(4, Math.round(bs / 8)), (x, y) => {
     const ramp = 0.5 + 0.5 * (((x - w / 2) * gx + (y - h / 2) * gy) / half);
-    return 0.55 * ramp + 0.45 * noiseBlot.fbm(x / bs, y / bs, 3);
+    return 0.275 + PRESS_RAMP * (ramp - 0.5) + 0.45 * noiseBlot.fbm(x / bs, y / bs, 3);
   });
 
   const rowH = h / opts.rows;
@@ -649,7 +656,7 @@ function applyCarved(canvas: HTMLCanvasElement, opts: StampOptions): void {
   const bs = S(P.blotScale, u);
   const pressureRaw = coarseField(w, h, Math.max(4, Math.round(bs / 8)), (x, y) => {
     const ramp = 0.5 + 0.5 * (((x - w / 2) * gx + (y - h / 2) * gy) / half);
-    return 0.55 * ramp + 0.45 * nBlot.fbm(x / bs, y / bs, 3);
+    return 0.275 + PRESS_RAMP * (ramp - 0.5) + 0.45 * nBlot.fbm(x / bs, y / bs, 3);
   });
 
   const rowH = h / opts.rows;
