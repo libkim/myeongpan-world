@@ -20,6 +20,7 @@ import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import type { Fit } from "@/lib/fit";
 import type { FontOption } from "@/lib/fonts";
 import {
   canvasToPngBlob,
@@ -63,6 +64,7 @@ export function NameplateStudio({ fonts }: { fonts: FontOption[] }) {
   const [style, setStyle] = useState(DEFAULT_STYLE);
   const [paperBackdrop, setPaperBackdrop] = useState(true);
   const [size, setSize] = useState({ w: 0, h: 0, mmW: 0, mmH: 0 });
+  const [fits, setFits] = useState<Partial<Record<keyof NameplateContent, Fit>>>({});
   const [busy, setBusy] = useState(false);
 
   const previewRef = useRef<HTMLCanvasElement>(null);
@@ -107,6 +109,7 @@ export function NameplateStudio({ fonts }: { fonts: FontOption[] }) {
         mmW: result.widthMm,
         mmH: result.heightMm,
       });
+      setFits(result.fits);
 
       const dest = previewRef.current;
       if (dest) {
@@ -180,7 +183,10 @@ export function NameplateStudio({ fonts }: { fonts: FontOption[] }) {
             <TabsContent value="content" className="mt-4 space-y-4">
               {FIELDS.map((field) => (
                 <div key={field.key} className="space-y-2">
-                  <Label htmlFor={field.key}>{field.label}</Label>
+                  <div className="flex items-center justify-between gap-2">
+                    <Label htmlFor={field.key}>{field.label}</Label>
+                    <FitHint fit={fits[field.key]} />
+                  </div>
                   <Input
                     id={field.key}
                     value={content[field.key]}
@@ -242,7 +248,7 @@ export function NameplateStudio({ fonts }: { fonts: FontOption[] }) {
               <SliderRow
                 label="가로 길이"
                 value={style.widthMm}
-                min={40}
+                min={30}
                 max={100}
                 step={1}
                 suffix="mm"
@@ -251,12 +257,34 @@ export function NameplateStudio({ fonts }: { fonts: FontOption[] }) {
               <SliderRow
                 label="가로세로 비율"
                 value={style.aspectRatio}
-                min={2}
-                max={5}
-                step={0.1}
+                min={1.2}
+                max={4}
+                step={0.01}
                 suffix=": 1"
                 onChange={(v) => updateStyle("aspectRatio", v)}
               />
+              <SliderRow
+                label="최소 자간"
+                value={style.minTracking}
+                min={-0.2}
+                max={0}
+                step={0.01}
+                format={(v) => `${Math.round(v * 100)}%`}
+                onChange={(v) => updateStyle("minTracking", v)}
+              />
+              <SliderRow
+                label="최소 장평"
+                value={style.minScaleX}
+                min={0.4}
+                max={1}
+                step={0.01}
+                format={(v) => `${Math.round(v * 100)}%`}
+                onChange={(v) => updateStyle("minScaleX", v)}
+              />
+              <p className="text-muted-foreground text-xs">
+                칸보다 글이 길면 자간을 먼저 좁히고, 최소 자간에 닿으면 장평을 줄이고,
+                최소 장평에도 닿으면 그때 글자 크기를 줄입니다.
+              </p>
               <SliderRow
                 label="획 굵기"
                 value={style.weight}
@@ -381,6 +409,29 @@ export function NameplateStudio({ fonts }: { fonts: FontOption[] }) {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+const STAGE_LABEL: Record<Fit["stage"], string> = {
+  fits: "",
+  tracking: "자간 조정",
+  scaleX: "장평",
+  size: "글자 축소",
+};
+
+function FitHint({ fit }: { fit?: Fit }) {
+  if (!fit || fit.stage === "fits") return null;
+  const detail =
+    fit.stage === "scaleX" || fit.stage === "size" ? ` ${Math.round(fit.scaleX * 100)}%` : "";
+  return (
+    <span
+      className={
+        fit.stage === "size" ? "text-xs text-amber-600" : "text-muted-foreground text-xs"
+      }
+    >
+      {STAGE_LABEL[fit.stage]}
+      {detail}
+    </span>
   );
 }
 

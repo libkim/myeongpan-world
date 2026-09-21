@@ -1,9 +1,12 @@
 /**
  * 사업자명판 렌더링 엔진.
  *
- * 명판은 네 줄의 좌우 끝이 모두 맞는 직사각형 덩어리로 찍힌다.
- * 줄마다 글자 수가 다르므로 줄별 크기를 달리하고, 자간을 늘려 폭을 채운다.
+ * 명판은 서식의 공급자란에 찍혀 각 값이 제 칸에 들어가야 한다.
+ * 칸 배치는 영수증·세금계산서·거래명세표 서식 여러 종의 공급자란을 실측해 평균 낸 값이다.
+ * 글이 칸보다 길면 자간 → 장평 → 글자 크기 순으로 줄인다 (fit.ts).
  */
+
+import { fitText, fittedWidth, type Fit, type FitLimits } from "./fit";
 
 export interface NameplateContent {
   /** 사업자등록번호 */
@@ -40,7 +43,49 @@ export interface NameplateStyle {
   spaceOutOwnerName: boolean;
   /** 테두리 표시 */
   border: boolean;
+  /** 칸에 맞출 때 허용하는 최소 자간 (글자 크기 대비) */
+  minTracking: number;
+  /** 칸에 맞출 때 허용하는 최소 장평 */
+  minScaleX: number;
 }
+
+/*
+ * 공급자란 실측 평균 (공급자란 폭 = 100%)
+ *   항목 라벨 칸 끝 28.5% — 명판은 여기서부터 오른쪽 끝까지(71.5%)를 차지한다
+ *   상호 35.8% · 성명 29.2% · 업태 28.8% · 종목 35.8% · 등록번호/소재지 71.5%
+ *   네 행 높이는 각 25% 로 같고, 공급자란 가로세로비는 2.28 : 1
+ */
+const VALUE_AREA = 71.5;
+const cellWidth = (pct: number) => pct / VALUE_AREA;
+
+/** 명판 가로세로비 = 공급자란 가로세로비 × 값 영역 폭 비율 */
+export const PLATE_ASPECT = Math.round(2.28 * (VALUE_AREA / 100) * 100) / 100;
+
+type Align = "justify" | "left" | "right";
+
+interface Cell {
+  key: keyof NameplateContent;
+  row: number;
+  /** 명판 폭 대비 칸 시작·끝 (0 ~ 1) */
+  x0: number;
+  x1: number;
+  align: Align;
+}
+
+const CELLS: Cell[] = [
+  { key: "bizNumber", row: 0, x0: 0, x1: 1, align: "justify" },
+  { key: "companyName", row: 1, x0: 0, x1: cellWidth(35.8), align: "left" },
+  { key: "ownerName", row: 1, x0: 1 - cellWidth(29.2), x1: 1, align: "right" },
+  { key: "address", row: 2, x0: 0, x1: 1, align: "justify" },
+  { key: "businessType", row: 3, x0: 0, x1: cellWidth(28.8), align: "left" },
+  { key: "businessItem", row: 3, x0: 1 - cellWidth(35.8), x1: 1, align: "right" },
+];
+const ROWS = 4;
+
+/** 행 높이 대비 글자(한글 몸체) 높이 */
+const TEXT_FILL = 0.6;
+/** 행 높이 대비 칸 안쪽 좌우 여백 */
+const CELL_INSET = 0.12;
 
 export const DEFAULT_CONTENT: NameplateContent = {
   bizNumber: "123-45-67890",
@@ -52,8 +97,8 @@ export const DEFAULT_CONTENT: NameplateContent = {
 };
 
 export const DEFAULT_STYLE: Omit<NameplateStyle, "fontFamily"> = {
-  widthMm: 66,
-  aspectRatio: 3.1,
+  widthMm: 50,
+  aspectRatio: PLATE_ASPECT,
   color: "#1a2e78",
   weight: 0.022,
   inkTexture: 0.15,
@@ -61,103 +106,46 @@ export const DEFAULT_STYLE: Omit<NameplateStyle, "fontFamily"> = {
   dpi: 600,
   spaceOutOwnerName: true,
   border: false,
+  minTracking: -0.05,
+  minScaleX: 0.6,
 };
-
-const PAD_MM = 1.4;
-const MIN_LEADING_RATIO = 0.18;
-
-type Line =
-  | { kind: "justify"; text: string; scale: number }
-  | { kind: "split"; left: string; right: string; scale: number };
-
-function spaceOut(text: string): string {
-  return text.split("").join(" ");
-}
-
-function buildLines(content: NameplateContent, style: NameplateStyle): Line[] {
-  const owner = style.spaceOutOwnerName
-    ? spaceOut(content.ownerName.replace(/\s+/g, ""))
-    : content.ownerName;
-
-  return [
-    { kind: "justify", text: content.bizNumber, scale: 1.26 },
-    { kind: "split", left: content.companyName, right: owner, scale: 1.26 },
-    { kind: "justify", text: content.address, scale: 1.0 },
-    { kind: "split", left: content.businessType, right: content.businessItem, scale: 1.2 },
-  ];
-}
 
 function setFont(ctx: CanvasRenderingContext2D, family: string, size: number) {
   ctx.font = `${size}px ${family}`;
 }
 
-/** 자간을 무시한 순수 글자 폭. 이 값이 가용 폭을 넘지 않도록 기준 크기를 잡는다. */
-function naturalWidth(
-  ctx: CanvasRenderingContext2D,
-  line: Line,
-  family: string,
-  base: number,
-): number {
-  setFont(ctx, family, base * line.scale);
-  if (line.kind === "justify") {
-    return line.text.split("").reduce((sum, ch) => sum + ctx.measureText(ch).width, 0);
+function cellText(content: NameplateContent, style: NameplateStyle, key: keyof NameplateContent) {
+  const raw = content[key].trim();
+  if (key === "ownerName" && style.spaceOutOwnerName) {
+    return raw.replace(/\s+/g, "").split("").join(" ");
   }
-  // 좌우 분리 줄은 두 덩어리 사이에 최소 간격을 둔다.
-  return (
-    ctx.measureText(line.left).width +
-    ctx.measureText(line.right).width +
-    ctx.measureText("    ").width
-  );
+  return raw;
 }
 
-function lineHeight(ctx: CanvasRenderingContext2D, family: string, size: number): number {
-  setFont(ctx, family, size);
-  const m = ctx.measureText("가힣0A");
-  const ascent = m.actualBoundingBoxAscent || size * 0.8;
-  const descent = m.actualBoundingBoxDescent || size * 0.2;
-  return ascent + descent;
-}
-
-function drawJustified(
+/** 글자별로 자간·장평을 적용해 그린다. */
+function drawFitted(
   ctx: CanvasRenderingContext2D,
-  text: string,
-  x0: number,
-  x1: number,
+  chars: string[],
+  unitWidths: number[],
+  fit: Fit,
+  x: number,
   baseline: number,
-  strokeWidth: number,
+  strokeRatio: number,
 ) {
-  const chars = text.split("");
-  if (chars.length === 0) return;
-  const natural = chars.reduce((sum, ch) => sum + ctx.measureText(ch).width, 0);
-  const extra = chars.length > 1 ? (x1 - x0 - natural) / (chars.length - 1) : 0;
-  let x = x0;
-  for (const ch of chars) {
+  const strokeWidth = strokeRatio > 0 ? fit.size * strokeRatio * 2 : 0;
+  let cursor = x;
+  chars.forEach((ch, i) => {
+    ctx.save();
+    ctx.translate(cursor, baseline);
+    ctx.scale(fit.scaleX, 1);
     if (strokeWidth > 0) {
       ctx.lineWidth = strokeWidth;
-      ctx.strokeText(ch, x, baseline);
+      ctx.strokeText(ch, 0, 0);
     }
-    ctx.fillText(ch, x, baseline);
-    x += ctx.measureText(ch).width + extra;
-  }
-}
-
-function drawSplit(
-  ctx: CanvasRenderingContext2D,
-  left: string,
-  right: string,
-  x0: number,
-  x1: number,
-  baseline: number,
-  strokeWidth: number,
-) {
-  if (strokeWidth > 0) ctx.lineWidth = strokeWidth;
-  ctx.textAlign = "left";
-  if (strokeWidth > 0) ctx.strokeText(left, x0, baseline);
-  ctx.fillText(left, x0, baseline);
-  ctx.textAlign = "right";
-  if (strokeWidth > 0) ctx.strokeText(right, x1, baseline);
-  ctx.fillText(right, x1, baseline);
-  ctx.textAlign = "left";
+    ctx.fillText(ch, 0, 0);
+    ctx.restore();
+    cursor += unitWidths[i] * fit.size * fit.scaleX + fit.tracking;
+  });
 }
 
 /** 여러 옥타브를 겹친 부드러운 잡음. 잉크가 고르게 묻지 않은 느낌을 만든다. */
@@ -241,6 +229,8 @@ export interface RenderResult {
   canvas: HTMLCanvasElement;
   widthMm: number;
   heightMm: number;
+  /** 칸별로 어느 단계까지 줄였는지 */
+  fits: Partial<Record<keyof NameplateContent, Fit>>;
 }
 
 export function renderNameplate(
@@ -250,38 +240,25 @@ export function renderNameplate(
   const pxPerMm = style.dpi / 25.4;
   const width = Math.max(1, Math.round(style.widthMm * pxPerMm));
   const height = Math.max(1, Math.round(width / style.aspectRatio));
-  const pad = Math.round(PAD_MM * pxPerMm);
-  const avail = Math.max(1, width - pad * 2);
+  const fits: RenderResult["fits"] = {};
 
   const plate = document.createElement("canvas");
   plate.width = width;
   plate.height = height;
   const ctx = plate.getContext("2d");
-  if (!ctx) return { canvas: plate, widthMm: style.widthMm, heightMm: height / pxPerMm };
+  if (!ctx) return { canvas: plate, widthMm: style.widthMm, heightMm: height / pxPerMm, fits };
 
-  const lines = buildLines(content, style);
+  const rowHeight = height / ROWS;
+  const inset = rowHeight * CELL_INSET;
+  const limits: FitLimits = { minTracking: style.minTracking, minScaleX: style.minScaleX };
 
-  // 모든 줄이 가용 폭 안에 들어가는 최대 기준 크기를 이분 탐색한다.
-  let lo = 4;
-  let hi = Math.max(8, Math.round(height));
-  while (lo < hi) {
-    const mid = Math.ceil((lo + hi) / 2);
-    const widest = Math.max(...lines.map((l) => naturalWidth(ctx, l, style.fontFamily, mid)));
-    if (widest <= avail) lo = mid;
-    else hi = mid - 1;
-  }
-  const base = lo;
-
-  const heights = lines.map((l) => lineHeight(ctx, style.fontFamily, base * l.scale));
-  const totalText = heights.reduce((a, b) => a + b, 0);
-  const gaps = lines.length - 1;
-  const leading = Math.max(
-    base * MIN_LEADING_RATIO,
-    gaps > 0 ? (height - pad * 2 - totalText) / gaps : 0,
-  );
-
-  const blockHeight = totalText + leading * gaps;
-  let y = (height - blockHeight) / 2;
+  // 한글 몸체 높이가 행 높이의 TEXT_FILL 이 되는 크기를 기본 크기로 삼는다.
+  const probe = 100;
+  setFont(ctx, style.fontFamily, probe);
+  const pm = ctx.measureText("가힣");
+  const bodyRatio =
+    ((pm.actualBoundingBoxAscent || probe * 0.8) + (pm.actualBoundingBoxDescent || 0)) / probe;
+  const baseSize = (rowHeight * TEXT_FILL) / bodyRatio;
 
   ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = "#000";
@@ -290,21 +267,30 @@ export function renderNameplate(
   ctx.textAlign = "left";
   ctx.textBaseline = "alphabetic";
 
-  lines.forEach((line, i) => {
-    const size = base * line.scale;
-    setFont(ctx, style.fontFamily, size);
-    const m = ctx.measureText("가힣0A");
-    const ascent = m.actualBoundingBoxAscent || size * 0.8;
-    const baseline = y + ascent;
-    const strokeWidth = style.weight > 0 ? size * style.weight * 2 : 0;
+  for (const cell of CELLS) {
+    const text = cellText(content, style, cell.key);
+    if (!text) continue;
+    const chars = Array.from(text);
 
-    if (line.kind === "justify") {
-      drawJustified(ctx, line.text, pad, width - pad, baseline, strokeWidth);
-    } else {
-      drawSplit(ctx, line.left, line.right, pad, width - pad, baseline, strokeWidth);
-    }
-    y += heights[i] + leading;
-  });
+    setFont(ctx, style.fontFamily, probe);
+    const unitWidths = chars.map((ch) => ctx.measureText(ch).width / probe);
+
+    const left = cell.x0 * width + inset;
+    const right = cell.x1 * width - inset;
+    const fit = fitText(unitWidths, right - left, baseSize, limits, cell.align === "justify");
+    fits[cell.key] = fit;
+
+    // 행 한가운데에 한글 몸체가 오도록 기준선을 잡는다.
+    setFont(ctx, style.fontFamily, fit.size);
+    const m = ctx.measureText("가힣");
+    const ascent = m.actualBoundingBoxAscent || fit.size * 0.8;
+    const descent = m.actualBoundingBoxDescent || 0;
+    const baseline = rowHeight * cell.row + rowHeight / 2 + (ascent - descent) / 2;
+
+    const used = fittedWidth(unitWidths, fit);
+    const x = cell.align === "right" ? right - used : left;
+    drawFitted(ctx, chars, unitWidths, fit, x, baseline, style.weight);
+  }
 
   if (style.border) {
     const bw = Math.max(1, Math.round(0.35 * pxPerMm));
@@ -321,7 +307,7 @@ export function renderNameplate(
   ctx.globalCompositeOperation = "source-over";
 
   if (Math.abs(style.rotationDeg) < 0.01) {
-    return { canvas: plate, widthMm: style.widthMm, heightMm: height / pxPerMm };
+    return { canvas: plate, widthMm: style.widthMm, heightMm: height / pxPerMm, fits };
   }
 
   const rad = (style.rotationDeg * Math.PI) / 180;
@@ -334,12 +320,12 @@ export function renderNameplate(
   rotated.width = rw;
   rotated.height = rh;
   const rctx = rotated.getContext("2d");
-  if (!rctx) return { canvas: plate, widthMm: style.widthMm, heightMm: height / pxPerMm };
+  if (!rctx) return { canvas: plate, widthMm: style.widthMm, heightMm: height / pxPerMm, fits };
   rctx.translate(rw / 2, rh / 2);
   rctx.rotate(rad);
   rctx.drawImage(plate, -width / 2, -height / 2);
 
-  return { canvas: rotated, widthMm: rw / pxPerMm, heightMm: rh / pxPerMm };
+  return { canvas: rotated, widthMm: rw / pxPerMm, heightMm: rh / pxPerMm, fits };
 }
 
 export function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {
