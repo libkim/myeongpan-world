@@ -13,11 +13,13 @@ health_check = "/"
 public_paths = ["/"]
 
 [resources]
-memory_mb = 256
-# npm ci 와 next build 는 실행 시보다 훨씬 많은 메모리를 쓴다.
+# 명판은 브라우저 캔버스에서 만들어지므로 서버는 페이지와 정적 파일만 내준다.
+# 실측 유휴 43MB, 요청 50회 뒤 51MB 라 128MB 면 두 배 남짓 여유가 있다.
+memory_mb = 128
+# 반면 npm ci 와 next build 는 실행 시보다 훨씬 많은 메모리를 쓴다.
 # 기본값(memory_mb)으로는 빌드 도중 OOM 으로 죽는다.
 build_memory_mb = 4096
-cpu_cores = 0.5
+cpu_cores = 0.25
 
 [data]
 # 명판은 브라우저 안에서만 만들어지고 입력값을 저장하지 않으므로
