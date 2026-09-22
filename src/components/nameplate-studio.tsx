@@ -46,6 +46,21 @@ const FIELDS: Array<{
 /** '반듯하게' 에서 쓰는 고정 시드. 언제 열어도 같은 인영이 찍힌다. */
 const FIXED_SEED = 1;
 
+/**
+ * 미리보기 서식 배경. 값은 이미지에서 괘선을 검출해 얻은 것이다.
+ * 명판은 서식의 행 높이에 맞춰 넣고, 라벨 칸이 끝나는 선에서 시작한다.
+ */
+const FORM = {
+  src: "/form.png",
+  w: 1509,
+  h: 1042,
+  /** 명판이 들어갈 칸. 이미지에서 괘선을 검출해 얻은 값이고 단위는 % 다. */
+  left: 30.517,
+  top: 18.81,
+  width: 63.839,
+  height: 56.718,
+} as const;
+
 /** '랜덤하게' 의 기울기 범위(도). 방향도 무작위로 고른다. */
 const TILT_MIN = 0.5;
 const TILT_MAX = 1.5;
@@ -72,9 +87,27 @@ export function NameplateStudio({ fonts }: { fonts: FontOption[] }) {
   const inkSeed = regen.seed;
   const [stampStyle, setStampStyle] = useState<StampStyle>(DEFAULT_STYLE.stampStyle);
   const [paperBackdrop, setPaperBackdrop] = useState(true);
-  const [size, setSize] = useState({ w: 0, h: 0, mmW: 0, mmH: 0 });
+  const [size, setSize] = useState({ w: 0, h: 0, mmW: 0, mmH: 0, plateW: 0, plateH: 0 });
   const [fits, setFits] = useState<Partial<Record<keyof NameplateContent, Fit>>>({});
   const [busy, setBusy] = useState(false);
+
+  /**
+   * 서식 배경 위 명판 자리. 기울이면 캔버스가 잘리지 않으려고 커지는데,
+   * 그 커진 캔버스를 칸에 맞추면 명판이 작아지고 아래로 밀린다.
+   * 그래서 캔버스를 커진 비율만큼 키우고, 늘어난 만큼 가운데로 되돌린다.
+   * 배경은 건드리지 않으므로 명판만 기울어진다.
+   */
+  const formCanvasStyle = useMemo(() => {
+    const grow = size.plateW > 0 ? size.w / size.plateW : 1;
+    const growY = size.plateH > 0 ? size.h / size.plateH : 1;
+    const w = FORM.width * grow;
+    const h = FORM.height * growY;
+    return {
+      left: `${FORM.left - (w - FORM.width) / 2}%`,
+      top: `${FORM.top - (h - FORM.height) / 2}%`,
+      width: `${w}%`,
+    };
+  }, [size.w, size.h, size.plateW, size.plateH]);
 
   const previewRef = useRef<HTMLCanvasElement>(null);
   const renderedRef = useRef<HTMLCanvasElement | null>(null);
@@ -131,6 +164,8 @@ export function NameplateStudio({ fonts }: { fonts: FontOption[] }) {
         h: result.canvas.height,
         mmW: result.widthMm,
         mmH: result.heightMm,
+        plateW: result.plateWidth,
+        plateH: result.plateHeight,
       });
       setFits(result.fits);
 
@@ -324,25 +359,34 @@ export function NameplateStudio({ fonts }: { fonts: FontOption[] }) {
           )}
         </CardHeader>
         <CardContent className="space-y-4">
-          <div
-            className="flex items-center justify-center overflow-hidden rounded-lg border p-4"
-            style={
-              paperBackdrop
-                ? { backgroundColor: "#faf8f3" }
-                : {
-                    backgroundImage:
-                      "linear-gradient(45deg,#e5e7eb 25%,transparent 25%),linear-gradient(-45deg,#e5e7eb 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#e5e7eb 75%),linear-gradient(-45deg,transparent 75%,#e5e7eb 75%)",
-                    backgroundSize: "16px 16px",
-                    backgroundPosition: "0 0,0 8px,8px -8px,-8px 0",
-                  }
-            }
-          >
-            <canvas ref={previewRef} className="h-auto w-full max-w-full" />
-          </div>
+          {paperBackdrop ? (
+            <div
+              className="relative overflow-hidden rounded-lg border"
+              style={{
+                aspectRatio: `${FORM.w} / ${FORM.h}`,
+                backgroundImage: `url(${FORM.src})`,
+                backgroundSize: "100% 100%",
+              }}
+            >
+              <canvas ref={previewRef} className="absolute h-auto" style={formCanvasStyle} />
+            </div>
+          ) : (
+            <div
+              className="flex items-center justify-center overflow-hidden rounded-lg border p-4"
+              style={{
+                backgroundImage:
+                  "linear-gradient(45deg,#e5e7eb 25%,transparent 25%),linear-gradient(-45deg,#e5e7eb 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#e5e7eb 75%),linear-gradient(-45deg,transparent 75%,#e5e7eb 75%)",
+                backgroundSize: "16px 16px",
+                backgroundPosition: "0 0,0 8px,8px -8px,-8px 0",
+              }}
+            >
+              <canvas ref={previewRef} className="h-auto w-full max-w-full" />
+            </div>
+          )}
 
           <ToggleRow
             id="paper"
-            label="종이 배경으로 보기"
+            label="서식 배경으로 보기"
             hint="끄면 투명 격자 위에서 확인합니다."
             checked={paperBackdrop}
             onChange={setPaperBackdrop}

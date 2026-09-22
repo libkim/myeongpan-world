@@ -39,3 +39,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# next dev 가 매번 다시 만드는 에이전트 규칙 파일
+/AGENTS.md
+/CLAUDE.md

@@ -231,6 +231,12 @@ export interface RenderResult {
   canvas: HTMLCanvasElement;
   widthMm: number;
   heightMm: number;
+  /**
+   * 기울이기 전 명판 크기(px). 기울이면 캔버스가 잘리지 않게 커지므로,
+   * 명판을 서식 칸에 얹을 때는 캔버스가 아니라 이 크기를 기준으로 맞춘다.
+   */
+  plateWidth: number;
+  plateHeight: number;
   /** 칸별로 어느 단계까지 줄였는지 */
   fits: Partial<Record<keyof NameplateContent, Fit>>;
 }
@@ -248,7 +254,7 @@ export function renderNameplate(
   plate.width = width;
   plate.height = height;
   const ctx = plate.getContext("2d");
-  if (!ctx) return { canvas: plate, widthMm: style.widthMm, heightMm: height / pxPerMm, fits };
+  if (!ctx) return { canvas: plate, widthMm: style.widthMm, heightMm: height / pxPerMm, plateWidth: width, plateHeight: height, fits };
 
   const rowHeight = height / ROWS;
   const inset = rowHeight * CELL_INSET;
@@ -362,7 +368,7 @@ export function renderNameplate(
   });
 
   if (Math.abs(style.rotationDeg) < 0.01) {
-    return { canvas: plate, widthMm: style.widthMm, heightMm: height / pxPerMm, fits };
+    return { canvas: plate, widthMm: style.widthMm, heightMm: height / pxPerMm, plateWidth: width, plateHeight: height, fits };
   }
 
   const rad = (style.rotationDeg * Math.PI) / 180;
@@ -375,12 +381,19 @@ export function renderNameplate(
   rotated.width = rw;
   rotated.height = rh;
   const rctx = rotated.getContext("2d");
-  if (!rctx) return { canvas: plate, widthMm: style.widthMm, heightMm: height / pxPerMm, fits };
+  if (!rctx) return { canvas: plate, widthMm: style.widthMm, heightMm: height / pxPerMm, plateWidth: width, plateHeight: height, fits };
   rctx.translate(rw / 2, rh / 2);
   rctx.rotate(rad);
   rctx.drawImage(plate, -width / 2, -height / 2);
 
-  return { canvas: rotated, widthMm: rw / pxPerMm, heightMm: rh / pxPerMm, fits };
+  return {
+    canvas: rotated,
+    widthMm: rw / pxPerMm,
+    heightMm: rh / pxPerMm,
+    plateWidth: width,
+    plateHeight: height,
+    fits,
+  };
 }
 
 export function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {
