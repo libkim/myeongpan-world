@@ -46,6 +46,10 @@ export const STAMP = {
   darken: 0.3, // 잉크가 두꺼운 곳을 더 진하게
   edgeBand: 0.04, // 잉크 경계가 넘어가는 폭 (블러 값 기준). 좁으면 테두리가 계단처럼 보인다
   inkBoost: 1.2, // 전체 농도 보정
+  // 사진으로 찍어 보정한 느낌 (필름 알갱이)
+  inkGamma: 0.82, // 1 보다 작으면 전체가 진해진다
+  lumNoise: 0.14, // 밝기 알갱이 세기
+  colorNoise: 0.05, // 색 알갱이 세기 (채널마다 따로 흔든다)
   // 가독성
   minLegible: 0.82, // 행마다 원래 글자 픽셀 중 잉크가 남아야 하는 비율
 };
@@ -419,6 +423,7 @@ export function applyStamp(canvas: HTMLCanvasElement, opts: StampOptions): void 
 
   // 색: 잉크가 두꺼운 곳(테두리 고임·센 압력)은 조금 더 진하게.
   const [cr, cg, cb] = hexToRgb(opts.color);
+  const grainRand = mulberry32(opts.seed + 777);
   for (let i = 0; i < out.length; i += 1) {
     const a = out[i];
     const j = i * 4;
@@ -427,10 +432,15 @@ export function applyStamp(canvas: HTMLCanvasElement, opts: StampOptions): void 
       continue;
     }
     const shade = 1 + P.darken * (0.55 - Math.min(1, a / Math.max(mask[i], 1e-3)));
-    px[j] = Math.min(255, cr * shade);
-    px[j + 1] = Math.min(255, cg * shade);
-    px[j + 2] = Math.min(255, cb * shade);
-    px[j + 3] = Math.round(Math.min(1, a) * 255);
+    // 필름 알갱이: 밝기를 흔들고, 채널마다 따로 흔들어 색 알갱이를 만든다.
+    const lum = 1 + (grainRand() - 0.5) * 2 * P.lumNoise;
+    const cnR = (grainRand() - 0.5) * 2 * P.colorNoise * 255;
+    const cnG = (grainRand() - 0.5) * 2 * P.colorNoise * 255;
+    const cnB = (grainRand() - 0.5) * 2 * P.colorNoise * 255;
+    px[j] = Math.max(0, Math.min(255, cr * shade * lum + cnR));
+    px[j + 1] = Math.max(0, Math.min(255, cg * shade * lum + cnG));
+    px[j + 2] = Math.max(0, Math.min(255, cb * shade * lum + cnB));
+    px[j + 3] = Math.round(Math.pow(Math.min(1, a), P.inkGamma) * 255);
   }
   ctx.putImageData(image, 0, 0);
 }
