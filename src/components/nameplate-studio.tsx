@@ -1,6 +1,6 @@
 "use client";
 
-import { Download, RotateCcw, Shuffle } from "lucide-react";
+import { Download, RotateCcw, Shuffle, Stamp } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -67,7 +67,7 @@ export function NameplateStudio({ fonts }: { fonts: FontOption[] }) {
   const [widthMm, setWidthMm] = useState(DEFAULT_STYLE.widthMm);
   const [color, setColor] = useState(DEFAULT_STYLE.color);
   // 재생성: 반듯하게 = 고정 시드 + 기울기 0, 랜덤하게 = 누를 때마다 새 시드 + 새 기울기
-  const [regen, setRegen] = useState({ random: false, seed: FIXED_SEED, tilt: 0 });
+  const [regen, setRegen] = useState({ seed: FIXED_SEED, tilt: 0 });
   const tilt = regen.tilt;
   const inkSeed = regen.seed;
   const [stampStyle, setStampStyle] = useState<StampStyle>(DEFAULT_STYLE.stampStyle);
@@ -181,7 +181,7 @@ export function NameplateStudio({ fonts }: { fonts: FontOption[] }) {
     setFontId(fonts[0]?.id ?? "");
     setWidthMm(DEFAULT_STYLE.widthMm);
     setColor(DEFAULT_STYLE.color);
-    setRegen({ random: false, seed: FIXED_SEED, tilt: 0 });
+    setRegen({ seed: FIXED_SEED, tilt: 0 });
     setStampStyle(DEFAULT_STYLE.stampStyle);
   }, [fonts]);
 
@@ -281,25 +281,23 @@ export function NameplateStudio({ fonts }: { fonts: FontOption[] }) {
             ))}
           </ChoiceRow>
 
-          <ChoiceRow
-            label="재생성"
-            note={regen.random ? `${tilt > 0 ? "+" : ""}${tilt}°` : undefined}
-          >
+          <ChoiceRow label="재생성">
             <Button
               type="button"
               size="sm"
-              variant={regen.random ? "outline" : "default"}
-              onClick={() => setRegen({ random: false, seed: FIXED_SEED, tilt: 0 })}
+              variant="outline"
+              onClick={() => setRegen({ seed: FIXED_SEED, tilt: 0 })}
+              title="정해진 인영 모양으로 똑바로 다시 찍습니다"
             >
+              <Stamp className="size-3.5" />
               반듯하게
             </Button>
             <Button
               type="button"
               size="sm"
-              variant={regen.random ? "default" : "outline"}
+              variant="outline"
               onClick={() =>
                 setRegen({
-                  random: true,
                   seed: Math.floor(Math.random() * 2 ** 31),
                   tilt: randomTilt(),
                 })
@@ -396,21 +394,10 @@ function FitHint({ fit }: { fit?: Fit }) {
   );
 }
 
-function ChoiceRow({
-  label,
-  note,
-  children,
-}: {
-  label: string;
-  note?: string;
-  children: React.ReactNode;
-}) {
+function ChoiceRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="space-y-2">
-      <div className="flex items-center justify-between">
-        <Label>{label}</Label>
-        {note && <span className="text-muted-foreground text-xs tabular-nums">{note}</span>}
-      </div>
+      <Label>{label}</Label>
       <div className="flex flex-wrap gap-2">{children}</div>
     </div>
   );
